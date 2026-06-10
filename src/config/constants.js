@@ -1,0 +1,50 @@
+export const PHYSICS = {
+  FRICCION: 0.03,
+  FRICCION_PELOTA: 0.01,
+  PERDIDA_COLISION: 0.05,
+  COEF_RESTITUCION: 0.7,
+  UMBRAL_DETENIDO: 0.001
+}
+
+export const POWER = {
+  V_MAX_CAMPO: 0.63,
+  V_MAX_ARQUERO: 0.63,
+  KICK_RATIO_CAMPO: 1.0,
+  KICK_RATIO_ARQUERO: 1.3
+}
+
+export const PITCH_BASE = {
+  GOAL_TO_GOAL: 100,
+  WIDTH: 64,
+  GOAL_WIDTH: 7.32,
+  GOAL_DEPTH: 2.44,
+  GOAL_AREA_DEPTH: 5.5,
+  GOAL_AREA_WIDTH: 18.32,
+  CENTER_CIRCLE_RADIUS: 9.15,
+  BALL_RADIUS: 0.6,
+  DISK_RADIUS: 1.8,
+  MARGIN: 0.04
+}
+
+export const ENTITIES = {
+  JUGADORES_POR_EQUIPO: 5,
+  ARQUEROS: 1
+}
+
+export const COLORS = {
+  PITCH_GREEN: 0x2f8f57,
+  PITCH_LINE: 0xf8fafc,
+  BALL: 0xffffff,
+  TEAM_ROJO: 0xe63946,
+  TEAM_ROJO_SELECTED: 0xff8a8a,
+  TEAM_AZUL: 0x457b9d,
+  TEAM_AZUL_SELECTED: 0x82c7ff,
+  GOAL: 0xfff5e6,
+  DIRECTION_LINE: 0xf8fafc,
+  POWER_BAR: 0xffb703
+}
+
+export const TEAMS = {
+  ROJO: 'rojo',
+  AZUL: 'azul'
+}

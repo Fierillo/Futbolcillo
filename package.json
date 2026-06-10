@@ -1,0 +1,20 @@
+{
+  "name": "futbolcillo",
+  "version": "1.0.0",
+  "description": "Minimalist turn-based 2D football game",
+  "license": "ISC",
+  "type": "module",
+  "scripts": {
+    "dev": "npx vite",
+    "build": "npx vite build",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "phaser": "^3.87.0"
+  },
+  "devDependencies": {
+    "vite": "^6.3.5",
+    "vitest": "^4.1.8"
+  }
+}
