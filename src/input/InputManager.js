@@ -47,7 +47,8 @@ export class InputManager {
         esc: kb.addKey(Phaser.Input.Keyboard.KeyCodes.ESC),
         tab: kb.addKey(Phaser.Input.Keyboard.KeyCodes.TAB),
         enter: kb.addKey(Phaser.Input.Keyboard.KeyCodes.ENTER),
-        space: kb.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE)
+        space: kb.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE),
+        ctrl: kb.addKey(Phaser.Input.Keyboard.KeyCodes.CTRL)
       }
     } catch (e) {
       this.keys = null
@@ -104,29 +105,10 @@ export class InputManager {
 
   updateKeyboard() {
     this._initKeys()
-    if (!this.keys || !this.enabled || !this.selectedPlayer || this.isDragging) return
+    if (!this.keys || !this.enabled) return
 
     const now = performance.now()
     if (now - this.lastKbTime < 60) return
-
-    let changed = false
-
-    if (this.keys.left.isDown) {
-      this.kbAngle -= 0.07
-      changed = true
-    }
-    if (this.keys.right.isDown) {
-      this.kbAngle += 0.07
-      changed = true
-    }
-    if (this.keys.up.isDown) {
-      this.kbPower = Math.min(1, this.kbPower + 0.025)
-      changed = true
-    }
-    if (this.keys.down.isDown) {
-      this.kbPower = Math.max(0.05, this.kbPower - 0.025)
-      changed = true
-    }
 
     if (Phaser.Input.Keyboard.JustDown(this.keys.esc)) {
       this.deselectAll()
@@ -136,6 +118,28 @@ export class InputManager {
     if (Phaser.Input.Keyboard.JustDown(this.keys.tab)) {
       this.switchPlayer()
       return
+    }
+
+    if (!this.selectedPlayer) return
+
+    let changed = false
+    const fast = this.keys.ctrl.isDown ? 3 : 1
+
+    if (this.keys.left.isDown) {
+      this.kbAngle -= 0.03 * fast
+      changed = true
+    }
+    if (this.keys.right.isDown) {
+      this.kbAngle += 0.03 * fast
+      changed = true
+    }
+    if (this.keys.up.isDown) {
+      this.kbPower = Math.min(1, this.kbPower + 0.012 * fast)
+      changed = true
+    }
+    if (this.keys.down.isDown) {
+      this.kbPower = Math.max(0.05, this.kbPower - 0.012 * fast)
+      changed = true
     }
 
     if (Phaser.Input.Keyboard.JustDown(this.keys.enter) || Phaser.Input.Keyboard.JustDown(this.keys.space)) {
