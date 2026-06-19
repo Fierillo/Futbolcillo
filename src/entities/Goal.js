@@ -10,14 +10,12 @@ export class Goal {
     this.team = team
     this.pitch = pitch
 
-    const px = pitch.pitchToPixelX(x, y)
-    const py = pitch.pitchToPixelY(x, y)
-    const pw = width * pitch.scale
-    const ph = height * pitch.scale
-
+    const rect = pitch.rectToScreen(this)
     this.rectangle = scene.add.rectangle(
-      px + pw / 2, py + ph / 2,
-      pw, ph,
+      rect.x + rect.width / 2,
+      rect.y + rect.height / 2,
+      rect.width,
+      rect.height,
       COLORS.GOAL, 0.3
     )
     this.rectangle.setStrokeStyle(3, COLORS.GOAL)
@@ -29,11 +27,8 @@ export class Goal {
   }
 
   updateScale() {
-    const px = this.pitch.pitchToPixelX(this.x, this.y)
-    const py = this.pitch.pitchToPixelY(this.x, this.y)
-    const pw = this.width * this.pitch.scale
-    const ph = this.height * this.pitch.scale
-    this.rectangle.setPosition(px + pw / 2, py + ph / 2)
-    this.rectangle.setSize(pw, ph)
+    const rect = this.pitch.rectToScreen(this)
+    this.rectangle.setPosition(rect.x + rect.width / 2, rect.y + rect.height / 2)
+    this.rectangle.setSize(rect.width, rect.height)
   }
 }

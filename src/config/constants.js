@@ -3,7 +3,8 @@ export const PHYSICS = {
   FRICCION_PELOTA: 0.01,
   PERDIDA_COLISION: 0.05,
   COEF_RESTITUCION: 0.7,
-  UMBRAL_DETENIDO: 0.001
+  UMBRAL_DETENIDO: 0.001,
+  STEAL_FRONT_ANGLE: 1.2
 }
 
 export const POWER = {
@@ -27,21 +28,21 @@ export const PITCH_BASE = {
 }
 
 export const ENTITIES = {
-  JUGADORES_POR_EQUIPO: 5,
+  JUGADORES_POR_EQUIPO: 11,
   ARQUEROS: 1
 }
 
 export const COLORS = {
-  PITCH_GREEN: 0x2f8f57,
-  PITCH_LINE: 0xf8fafc,
-  BALL: 0xffffff,
-  TEAM_ROJO: 0xe63946,
-  TEAM_ROJO_SELECTED: 0xff8a8a,
-  TEAM_AZUL: 0x457b9d,
-  TEAM_AZUL_SELECTED: 0x82c7ff,
-  GOAL: 0xfff5e6,
-  DIRECTION_LINE: 0xf8fafc,
-  POWER_BAR: 0xffb703
+  PITCH_GREEN: 0x269b5a,
+  PITCH_LINE: 0xfffbf0,
+  BALL: 0xfff8d6,
+  TEAM_ROJO: 0xff4355,
+  TEAM_ROJO_SELECTED: 0xff8e8e,
+  TEAM_AZUL: 0x3e8dff,
+  TEAM_AZUL_SELECTED: 0x95d2ff,
+  GOAL: 0xfff5dd,
+  DIRECTION_LINE: 0xfffbf0,
+  POWER_BAR: 0xffc533
 }
 
 export const TEAMS = {

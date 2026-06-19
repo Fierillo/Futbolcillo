@@ -5,7 +5,6 @@ export class PhysicsEngine {
     this.bounds = pitchBounds
     this.goalAreas = goalAreas
     this.foulOccurred = false
-    this.ballTouchedBy = null
     this.goalDetected = null
     this.onFoul = null
     this.onGoal = null
@@ -13,7 +12,6 @@ export class PhysicsEngine {
 
   reset() {
     this.foulOccurred = false
-    this.ballTouchedBy = null
     this.goalDetected = null
   }
 
@@ -21,7 +19,6 @@ export class PhysicsEngine {
     this.goalDetected = null
 
     const all = [ball, ...players]
-
     const ballInGoalArea = this.isInGoalArea(ball)
 
     for (const entity of all) {
@@ -39,14 +36,36 @@ export class PhysicsEngine {
     }
 
     this.clampBounds(all, ball, goals)
+    this.detectGoal(ball, goals)
     this.resolveEntityCollisions(ball, players)
     this.clampBounds(all, ball, goals)
-    this.detectGoal(ball, goals)
+
+    this.clampBallAbsolute(ball)
 
     return {
       foul: this.foulOccurred,
       goal: this.goalDetected,
       allStopped: this.isAllStopped(all)
+    }
+  }
+
+  clampBallAbsolute(ball) {
+    const goalDepth = 2.44
+    if (ball.x - ball.radius < -goalDepth) {
+      ball.setPos(-goalDepth + ball.radius, ball.y)
+      ball.velocity.x = Math.abs(ball.velocity.x) * PHYSICS.COEF_RESTITUCION * (1 - PHYSICS.PERDIDA_COLISION)
+    }
+    if (ball.x + ball.radius > this.bounds.width + goalDepth) {
+      ball.setPos(this.bounds.width + goalDepth - ball.radius, ball.y)
+      ball.velocity.x = -Math.abs(ball.velocity.x) * PHYSICS.COEF_RESTITUCION * (1 - PHYSICS.PERDIDA_COLISION)
+    }
+    if (ball.y - ball.radius < this.bounds.y) {
+      ball.setPos(ball.x, this.bounds.y + ball.radius)
+      ball.velocity.y = Math.abs(ball.velocity.y) * PHYSICS.COEF_RESTITUCION * (1 - PHYSICS.PERDIDA_COLISION)
+    }
+    if (ball.y + ball.radius > this.bounds.y + this.bounds.height) {
+      ball.setPos(ball.x, this.bounds.y + this.bounds.height - ball.radius)
+      ball.velocity.y = -Math.abs(ball.velocity.y) * PHYSICS.COEF_RESTITUCION * (1 - PHYSICS.PERDIDA_COLISION)
     }
   }
 
@@ -101,47 +120,17 @@ export class PhysicsEngine {
     }
   }
 
-  resolveWallCollisions(ball, players) {
-    const all = [ball, ...players]
-    for (const entity of all) {
-      if (!entity.active) continue
-
-      const r = entity.radius
-
-      if (entity.x - r < this.bounds.x) {
-        entity.setPos(this.bounds.x + r, entity.y)
-        entity.velocity.x = Math.abs(entity.velocity.x) * PHYSICS.COEF_RESTITUCION * (1 - PHYSICS.PERDIDA_COLISION)
-      }
-      if (entity.x + r > this.bounds.x + this.bounds.width) {
-        entity.setPos(this.bounds.x + this.bounds.width - r, entity.y)
-        entity.velocity.x = -Math.abs(entity.velocity.x) * PHYSICS.COEF_RESTITUCION * (1 - PHYSICS.PERDIDA_COLISION)
-      }
-      if (entity.y - r < this.bounds.y) {
-        entity.setPos(entity.x, this.bounds.y + r)
-        entity.velocity.y = Math.abs(entity.velocity.y) * PHYSICS.COEF_RESTITUCION * (1 - PHYSICS.PERDIDA_COLISION)
-      }
-      if (entity.y + r > this.bounds.y + this.bounds.height) {
-        entity.setPos(entity.x, this.bounds.y + this.bounds.height - r)
-        entity.velocity.y = -Math.abs(entity.velocity.y) * PHYSICS.COEF_RESTITUCION * (1 - PHYSICS.PERDIDA_COLISION)
-      }
-    }
-  }
-
   resolveEntityCollisions(ball, players) {
-    for (let iter = 0; iter < 2; iter++) {
-      for (const player of players) {
-        this.resolvePlayerBallCollision(player, ball)
-      }
-    }
-
     for (let i = 0; i < players.length; i++) {
       for (let j = i + 1; j < players.length; j++) {
         this.circleCollision(players[i], players[j], 'player', 'player')
       }
     }
 
-    for (const player of players) {
-      this.resolvePlayerBallCollision(player, ball)
+    for (let iter = 0; iter < 3; iter++) {
+      for (const player of players) {
+        this.resolvePlayerBallCollision(player, ball)
+      }
     }
   }
 
@@ -162,6 +151,13 @@ export class PhysicsEngine {
     a.setPos(a.x - nx * overlap / 2, a.y - ny * overlap / 2)
     b.setPos(b.x + nx * overlap / 2, b.y + ny * overlap / 2)
 
+    if (typeA === 'player' && typeB === 'player') {
+      if (a.team !== b.team) {
+        this.foulOccurred = true
+        if (this.onFoul) this.onFoul()
+      }
+    }
+
     const relVx = a.velocity.x - b.velocity.x
     const relVy = a.velocity.y - b.velocity.y
     const relVelNormal = relVx * nx + relVy * ny
@@ -175,26 +171,68 @@ export class PhysicsEngine {
     a.velocity.y -= impulse * ny
     b.velocity.x += impulse * nx
     b.velocity.y += impulse * ny
+  }
 
-    if (typeA === 'player' && typeB === 'ball' ||
-        typeA === 'ball' && typeB === 'player') {
-      const player = typeA === 'player' ? a : b
-      if (!this.ballTouchedBy) {
-        this.ballTouchedBy = player
+  resolvePlayerBallCollision(player, ball) {
+    const dx = ball.x - player.x
+    const dy = ball.y - player.y
+    const dist = Math.sqrt(dx * dx + dy * dy)
+    const minDist = player.radius + ball.radius
+
+    if (dist >= minDist) return false
+
+    let nx = dx
+    let ny = dy
+    if (dist > 0) {
+      nx = dx / dist
+      ny = dy / dist
+    } else {
+      const rvx = ball.velocity.x - player.velocity.x
+      const rvy = ball.velocity.y - player.velocity.y
+      const rmag = Math.sqrt(rvx * rvx + rvy * rvy)
+      if (rmag > 0) {
+        nx = rvx / rmag
+        ny = rvy / rmag
+      } else {
+        nx = 1
+        ny = 0
       }
     }
+    const overlap = minDist - dist
 
-    if (typeA === 'player' && typeB === 'player') {
-      const teamA = a.team
-      const teamB = b.team
-      if (teamA !== teamB) {
-        const attackingPlayer = a.velocity.x !== 0 || a.velocity.y !== 0 ? a : b
-        if (this.ballTouchedBy !== attackingPlayer) {
-          this.foulOccurred = true
-          if (this.onFoul) this.onFoul()
-        }
+    ball.setPos(ball.x + nx * (overlap + 0.25), ball.y + ny * (overlap + 0.25))
+
+    const playerSpeed = Math.sqrt(
+      player.velocity.x * player.velocity.x +
+      player.velocity.y * player.velocity.y
+    )
+
+    if (playerSpeed < 0.001) {
+      const restitution = PHYSICS.COEF_RESTITUCION * (1 - PHYSICS.PERDIDA_COLISION)
+      const relVx = 0 - ball.velocity.x
+      const relVy = 0 - ball.velocity.y
+      const relVelNormal = relVx * nx + relVy * ny
+      if (relVelNormal >= 0) {
+        const impulse = relVelNormal * (1 + restitution)
+        ball.velocity.x += impulse * nx
+        ball.velocity.y += impulse * ny
       }
+      return true
     }
+
+    const dotPlayerNormal = player.velocity.x * nx + player.velocity.y * ny
+    const dotBallNormal = ball.velocity.x * nx + ball.velocity.y * ny
+
+    const restitution = PHYSICS.COEF_RESTITUCION * (1 - PHYSICS.PERDIDA_COLISION)
+    const transferRatio = player.kickRatio
+
+    ball.velocity.x = nx * dotPlayerNormal * transferRatio + (ball.velocity.x - nx * dotBallNormal) * restitution
+    ball.velocity.y = ny * dotPlayerNormal * transferRatio + (ball.velocity.y - ny * dotBallNormal) * restitution
+
+    player.velocity.x *= 0.3
+    player.velocity.y *= 0.3
+
+    return true
   }
 
   detectGoal(ball, goals) {
@@ -250,73 +288,5 @@ export class PhysicsEngine {
       player.setPos(player.x, areaBounds.y + areaBounds.height - r)
       player.velocity.y = 0
     }
-  }
-
-  resolvePlayerBallCollision(player, ball) {
-    const dx = ball.x - player.x
-    const dy = ball.y - player.y
-    const dist = Math.sqrt(dx * dx + dy * dy)
-    const minDist = player.radius + ball.radius
-
-    if (dist >= minDist) return false
-
-    let nx = dx
-    let ny = dy
-    if (dist > 0) {
-      nx = dx / dist
-      ny = dy / dist
-    } else {
-      const rvx = ball.velocity.x - player.velocity.x
-      const rvy = ball.velocity.y - player.velocity.y
-      const rmag = Math.sqrt(rvx * rvx + rvy * rvy)
-      if (rmag > 0) {
-        nx = rvx / rmag
-        ny = rvy / rmag
-      } else {
-        nx = 1
-        ny = 0
-      }
-    }
-    const overlap = minDist - dist
-
-    ball.setPos(ball.x + nx * (overlap + 0.25), ball.y + ny * (overlap + 0.25))
-
-    const playerSpeed = Math.sqrt(
-      player.velocity.x * player.velocity.x +
-      player.velocity.y * player.velocity.y
-    )
-
-    if (playerSpeed < 0.001) {
-      const restitution = PHYSICS.COEF_RESTITUCION * (1 - PHYSICS.PERDIDA_COLISION)
-      const relVx = 0 - ball.velocity.x
-      const relVy = 0 - ball.velocity.y
-      const relVelNormal = relVx * nx + relVy * ny
-      if (relVelNormal >= 0) {
-        const impulse = relVelNormal * (1 + restitution)
-        ball.velocity.x += impulse * nx
-        ball.velocity.y += impulse * ny
-      }
-      this.ballTouchedBy = this.ballTouchedBy || player
-      return true
-    }
-
-    const vnx = player.velocity.x / playerSpeed
-    const vny = player.velocity.y / playerSpeed
-
-    const dotPlayerNormal = player.velocity.x * nx + player.velocity.y * ny
-    const dotBallNormal = ball.velocity.x * nx + ball.velocity.y * ny
-
-    const restitution = PHYSICS.COEF_RESTITUCION * (1 - PHYSICS.PERDIDA_COLISION)
-    const transferRatio = player.kickRatio
-
-    ball.velocity.x = nx * dotPlayerNormal * transferRatio + (ball.velocity.x - nx * dotBallNormal) * restitution
-    ball.velocity.y = ny * dotPlayerNormal * transferRatio + (ball.velocity.y - ny * dotBallNormal) * restitution
-
-    player.velocity.x *= 0.3
-    player.velocity.y *= 0.3
-
-    this.ballTouchedBy = this.ballTouchedBy || player
-
-    return true
   }
 }

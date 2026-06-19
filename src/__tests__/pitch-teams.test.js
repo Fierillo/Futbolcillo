@@ -58,9 +58,9 @@ describe('Pitch (dimension logic)', () => {
 })
 
 describe('TeamManager (formation logic)', () => {
-  it('formation: 5 players per team', () => {
+  it('formation: 11 players per team', () => {
     const teamCount = ENTITIES.JUGADORES_POR_EQUIPO
-    expect(teamCount).toBe(5)
+    expect(teamCount).toBe(11)
   })
 
   it('horizontal separation > vertical in landscape', () => {
@@ -68,6 +68,12 @@ describe('TeamManager (formation logic)', () => {
     const sepX = bounds.width * 0.08
     const sepY = bounds.height * 0.12
     expect(sepX).toBeGreaterThan(sepY)
+  })
+
+  it('rows are spaced wider for the 11v11 layout', () => {
+    const bounds = { width: PITCH_BASE.GOAL_TO_GOAL, height: PITCH_BASE.WIDTH }
+    const rowGap = bounds.height * 0.22
+    expect(rowGap).toBeGreaterThan(bounds.height * 0.17)
   })
 })
 

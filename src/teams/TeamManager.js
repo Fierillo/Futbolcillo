@@ -24,10 +24,6 @@ export class TeamManager {
   }
 
   createTeam(team, bounds, cx, cy, side) {
-    const baseX = side === -1
-      ? bounds.x + bounds.width * 0.25
-      : bounds.x + bounds.width * 0.75
-
     const goalArea = side === -1
       ? this.pitch.getAreaChicaLeft()
       : this.pitch.getAreaChicaRight()
@@ -46,21 +42,28 @@ export class TeamManager {
     )
     this.teams[team].push(goalkeeper)
 
-    const separationX = bounds.width * 0.08
-    const separationY = bounds.height * 0.12
+    const halfStart = side === -1 ? bounds.x : bounds.x + bounds.width / 2
+    const halfWidth = bounds.width / 2
+    const lineRatios = [0.09, 0.36, 0.66]
+    const lineXs = side === -1
+      ? lineRatios.map(ratio => halfStart + halfWidth * ratio)
+      : lineRatios.map(ratio => halfStart + halfWidth * (1 - ratio))
+    const rowGap = bounds.height * 0.22
 
-    const formation = [
-      { dx: 0, dy: 0 },
-      { dx: separationX, dy: -separationY },
-      { dx: separationX, dy: separationY },
-      { dx: separationX * 2, dy: 0 }
-    ]
+    this.addRow(team, lineXs[0], cy, 4, rowGap)
+    this.addRow(team, lineXs[1], cy, 3, rowGap)
+    this.addRow(team, lineXs[2], cy, 3, rowGap)
+  }
 
-    for (const pos of formation) {
+  addRow(team, x, cy, count, rowGap) {
+    const start = -(count - 1) / 2
+
+    for (let i = 0; i < count; i++) {
+      const y = cy + (start + i) * rowGap
       const player = new Player(
         this.scene,
-        baseX + pos.dx * side,
-        cy + pos.dy,
+        x,
+        y,
         this.pitch,
         team,
         false

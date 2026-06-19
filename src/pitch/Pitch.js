@@ -65,7 +65,7 @@ export class Pitch {
 
   pitchToPixelX(px, py) {
     if (this.isPortrait) {
-      return this.offsetX + (PB.WIDTH - 1 - py) * this.scale
+      return this.offsetX + (PB.WIDTH - py) * this.scale
     }
     return this.offsetX + px * this.scale
   }
@@ -86,9 +86,27 @@ export class Pitch {
 
   pixelToPitchY(sx, sy) {
     if (this.isPortrait) {
-      return PB.WIDTH - 1 - ((sx - this.offsetX) / this.scale)
+      return PB.WIDTH - ((sx - this.offsetX) / this.scale)
     }
     return (sy - this.offsetY) / this.scale
+  }
+
+  rectToScreen(rect) {
+    if (this.isPortrait) {
+      return {
+        x: this.offsetX + (PB.WIDTH - (rect.y + rect.height)) * this.scale,
+        y: this.offsetY + rect.x * this.scale,
+        width: rect.height * this.scale,
+        height: rect.width * this.scale
+      }
+    }
+
+    return {
+      x: this.offsetX + rect.x * this.scale,
+      y: this.offsetY + rect.y * this.scale,
+      width: rect.width * this.scale,
+      height: rect.height * this.scale
+    }
   }
 
   getGoalLeft() {
@@ -193,12 +211,10 @@ export class Pitch {
   drawAreaChica(g) {
     g.lineStyle(2, COLORS.PITCH_LINE, 0.6)
 
-    const leftArea = this.getAreaChicaLeft()
-    const topLeft = { x: this.pitchToPixelX(leftArea.x, leftArea.y), y: this.pitchToPixelY(leftArea.x, leftArea.y) }
-    g.strokeRect(topLeft.x, topLeft.y, leftArea.width * this.scale, leftArea.height * this.scale)
+    const leftArea = this.rectToScreen(this.getAreaChicaLeft())
+    g.strokeRect(leftArea.x, leftArea.y, leftArea.width, leftArea.height)
 
-    const rightArea = this.getAreaChicaRight()
-    const topRight = { x: this.pitchToPixelX(rightArea.x, rightArea.y), y: this.pitchToPixelY(rightArea.x, rightArea.y) }
-    g.strokeRect(topRight.x, topRight.y, rightArea.width * this.scale, rightArea.height * this.scale)
+    const rightArea = this.rectToScreen(this.getAreaChicaRight())
+    g.strokeRect(rightArea.x, rightArea.y, rightArea.width, rightArea.height)
   }
 }

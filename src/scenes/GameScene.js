@@ -8,6 +8,8 @@ import { InputManager } from '../input/InputManager.js'
 import { AIController } from '../ai/AIController.js'
 import { COLORS } from '../config/constants.js'
 
+const MOVES_PER_TURN = 3
+
 export class GameScene extends Phaser.Scene {
   constructor() {
     super('GameScene')
@@ -21,7 +23,7 @@ export class GameScene extends Phaser.Scene {
     this.isSimulating = false
     this.turnActive = true
     this.foulCommitted = false
-    this.movesRemaining = 1
+    this.movesRemaining = MOVES_PER_TURN
 
     const { width, height } = this.scale
     this.setupField(width, height)
@@ -72,6 +74,9 @@ export class GameScene extends Phaser.Scene {
       (player) => this.onShot(player)
     )
 
+    this.ballCarrierIndicator = this.add.graphics()
+    this.ballCarrierIndicator.setDepth(95)
+
     this.createUI()
     this.updateUI()
   }
@@ -86,6 +91,7 @@ export class GameScene extends Phaser.Scene {
     if (this.scoreTextRojo) this.scoreTextRojo.destroy()
     if (this.turnText) this.turnText.destroy()
     if (this.messageText) this.messageText.destroy()
+    if (this.ballCarrierIndicator) this.ballCarrierIndicator.destroy()
 
     for (const team of Object.values(this.teams)) {
       for (const p of team) {
@@ -108,43 +114,51 @@ export class GameScene extends Phaser.Scene {
   createUI() {
     const { width, height } = this.scale
 
-    const barH = 44
+    const barH = 68
     this.uiBar = this.add.graphics()
-    this.uiBar.fillStyle(0x161b22, 0.92)
+    this.uiBar.fillStyle(0x07101a, 0.98)
     this.uiBar.fillRect(0, 0, width, barH)
-    this.uiBar.lineStyle(1, 0x30363d, 1)
+    this.uiBar.fillStyle(0x3e8dff, 1)
+    this.uiBar.fillRoundedRect(width * 0.04, 11, width * 0.25, 44, 16)
+    this.uiBar.fillStyle(0xff4355, 1)
+    this.uiBar.fillRoundedRect(width * 0.71, 11, width * 0.25, 44, 16)
+    this.uiBar.fillStyle(0x142334, 1)
+    this.uiBar.fillRoundedRect(width * 0.345, 13, width * 0.31, 40, 14)
+    this.uiBar.fillStyle(0xffc533, 1)
+    this.uiBar.fillRect(width * 0.345, 13, width * 0.31, 4)
+    this.uiBar.lineStyle(1, 0x254760, 1)
     this.uiBar.lineBetween(0, barH, width, barH)
     this.uiBar.setDepth(90)
 
     this.scoreTextAzul = this.add.text(width * 0.2, barH / 2, 'AZUL  0', {
-      fontSize: '22px',
-      fontFamily: '"Trebuchet MS", Arial, sans-serif',
-      color: '#82c7ff',
+      fontSize: '26px',
+      fontFamily: 'Impact, Haettenschweiler, "Arial Narrow Bold", sans-serif',
+      color: '#ffffff',
       fontStyle: 'bold'
     }).setOrigin(0.5).setDepth(91)
 
     this.scoreTextRojo = this.add.text(width * 0.8, barH / 2, 'ROJO  0', {
-      fontSize: '22px',
-      fontFamily: '"Trebuchet MS", Arial, sans-serif',
-      color: '#ff8a8a',
+      fontSize: '26px',
+      fontFamily: 'Impact, Haettenschweiler, "Arial Narrow Bold", sans-serif',
+      color: '#ffffff',
       fontStyle: 'bold'
     }).setOrigin(0.5).setDepth(91)
 
     this.turnText = this.add.text(width / 2, barH / 2, '', {
-      fontSize: '16px',
-      fontFamily: '"Trebuchet MS", Arial, sans-serif',
-      color: '#f8fafc',
+      fontSize: '19px',
+      fontFamily: '"Arial Black", "Trebuchet MS", sans-serif',
+      color: '#fffdf6',
       fontStyle: 'bold'
     }).setOrigin(0.5).setDepth(91)
 
     this.messageText = this.add.text(width / 2, height / 2, '', {
       fontSize: '36px',
-      fontFamily: '"Trebuchet MS", Arial, sans-serif',
-      color: '#f8fafc',
+      fontFamily: 'Impact, Haettenschweiler, "Arial Narrow Bold", sans-serif',
+      color: '#fffdf6',
       fontStyle: 'bold',
-      stroke: '#000000',
+      stroke: '#08111d',
       strokeThickness: 4,
-      backgroundColor: '#0f172add',
+      backgroundColor: '#122235ee',
       padding: { x: 30, y: 15 }
     }).setOrigin(0.5).setAlpha(0).setDepth(200)
   }
@@ -154,10 +168,8 @@ export class GameScene extends Phaser.Scene {
     this.scoreTextRojo.setText(`ROJO  ${this.score.rojo}`)
 
     const turnColor = this.currentTeam === 'azul' ? '#82c7ff' : '#ff8a8a'
-    let turnLabel = this.currentTeam === 'azul' ? 'YOUR TURN' : 'AI TURN'
-    if (this.movesRemaining > 1) {
-      turnLabel += ` ×${this.movesRemaining}`
-    }
+    let turnLabel = this.currentTeam === 'azul' ? 'TU TURNO' : 'TURNO IA'
+    turnLabel += ` (${this.movesRemaining})`
     this.turnText.setText(turnLabel)
     this.turnText.setStyle({ color: turnColor })
   }
@@ -171,6 +183,11 @@ export class GameScene extends Phaser.Scene {
   }
 
   onShot(player) {
+    if (this.movesRemaining <= 0) {
+      this.switchTurn()
+      return
+    }
+    this.movesRemaining--
     this.turnActive = false
     this.isSimulating = true
     this.physicsEngine.reset()
@@ -181,15 +198,6 @@ export class GameScene extends Phaser.Scene {
 
   onFoulDetected() {
     this.foulCommitted = true
-  }
-
-  stopAllEntities() {
-    this.ball.velocity.x = 0
-    this.ball.velocity.y = 0
-    for (const player of this.getAllPlayers()) {
-      player.velocity.x = 0
-      player.velocity.y = 0
-    }
   }
 
   onGoalScored(goal) {
@@ -204,6 +212,7 @@ export class GameScene extends Phaser.Scene {
 
   update(time, delta) {
     this.inputManager.updateKeyboard()
+    this.updateBallCarrierIndicator()
 
     if (!this.isSimulating) return
 
@@ -221,7 +230,6 @@ export class GameScene extends Phaser.Scene {
     if (result.foul) {
       if (!this.foulCommitted) {
         this.foulCommitted = true
-        this.showMessage('FOUL - Extra turn for rival', 1500)
       }
     }
 
@@ -235,68 +243,57 @@ export class GameScene extends Phaser.Scene {
     }
 
     if (result.allStopped) {
+      this.isSimulating = false
+
       if (this.foulCommitted) {
         this.foulCommitted = false
-        this.movesRemaining = 2
+        this.movesRemaining = MOVES_PER_TURN + 1
         this.currentTeam = this.currentTeam === 'azul' ? 'rojo' : 'azul'
         this.inputManager.currentTeam = this.currentTeam
-        this.isSimulating = false
-        this.updateUI()
-        if (this.currentTeam === 'azul') {
-          this.turnActive = true
-          this.inputManager.enable()
-        } else {
-          this.turnActive = false
-          this.inputManager.disable()
-          this.time.delayedCall(800, () => {
-            this.aiController.executeTurn('rojo', () => {
-              this.onShot(null)
-            })
-          })
-        }
+        this.showMessage('FALTA - Turno extra para rival', 1500)
+        this.enableTurn()
+        return
+      }
+
+      if (this.movesRemaining > 0) {
+        this.enableTurn()
       } else {
-        this.time.delayedCall(200, () => this.switchTurn())
-        this.isSimulating = false
+        this.switchTurn()
       }
     }
   }
 
-  switchTurn() {
-    if (this.movesRemaining > 1) {
-      this.movesRemaining--
-      this.updateUI()
-      if (this.currentTeam === 'azul') {
-        this.turnActive = true
-        this.inputManager.enable()
-      } else {
-        this.turnActive = false
-        this.inputManager.disable()
-        this.time.delayedCall(800, () => {
-          this.aiController.executeTurn('rojo', () => {
-            this.onShot(null)
-          })
-        })
-      }
-      return
-    }
+  updateBallCarrierIndicator() {
+    this.ballCarrierIndicator.clear()
+  }
 
-    this.movesRemaining = 1
-    this.currentTeam = this.currentTeam === 'azul' ? 'rojo' : 'azul'
-    this.inputManager.currentTeam = this.currentTeam
+  enableTurn() {
+    this.turnActive = true
     this.updateUI()
 
     if (this.currentTeam === 'azul') {
-      this.turnActive = true
       this.inputManager.enable()
     } else {
-      this.turnActive = false
       this.inputManager.disable()
-      this.time.delayedCall(800, () => {
+      this.time.delayedCall(600, () => {
         this.aiController.executeTurn('rojo', () => {
           this.onShot(null)
         })
       })
+      this.time.delayedCall(3000, () => {
+        if (this.currentTeam === 'rojo' && !this.isSimulating) {
+          this.movesRemaining = 0
+          this.switchTurn()
+        }
+      })
     }
+  }
+
+  switchTurn() {
+    this.movesRemaining = MOVES_PER_TURN
+    this.currentTeam = this.currentTeam === 'azul' ? 'rojo' : 'azul'
+    this.inputManager.currentTeam = this.currentTeam
+    this.enableTurn()
   }
 
   resetPositions(initialTeam = 'azul') {
@@ -312,20 +309,8 @@ export class GameScene extends Phaser.Scene {
     }
 
     this.currentTeam = initialTeam
-    this.turnActive = true
-    this.movesRemaining = 1
+    this.movesRemaining = MOVES_PER_TURN
     this.inputManager.currentTeam = initialTeam
-    this.updateUI()
-
-    if (initialTeam === 'azul') {
-      this.inputManager.enable()
-    } else {
-      this.inputManager.disable()
-      this.time.delayedCall(800, () => {
-        this.aiController.executeTurn('rojo', () => {
-          this.onShot(null)
-        })
-      })
-    }
+    this.enableTurn()
   }
 }

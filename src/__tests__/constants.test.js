@@ -76,8 +76,8 @@ describe('PITCH_BASE', () => {
 })
 
 describe('ENTITIES', () => {
-  it('hay 5 jugadores por equipo', () => {
-    expect(ENTITIES.JUGADORES_POR_EQUIPO).toBe(5)
+  it('hay 11 jugadores por equipo', () => {
+    expect(ENTITIES.JUGADORES_POR_EQUIPO).toBe(11)
   })
 
   it('hay 1 arquero', () => {

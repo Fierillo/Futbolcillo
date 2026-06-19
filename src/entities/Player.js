@@ -9,6 +9,8 @@ export class Player {
     this.radius = PITCH_BASE.DISK_RADIUS
     this.velocity = { x: 0, y: 0 }
     this.selected = false
+    this.facingX = 1
+    this.facingY = 0
 
     this.x = x
     this.y = y
@@ -64,6 +66,11 @@ export class Player {
   setVelocity(vx, vy) {
     this.velocity.x = vx
     this.velocity.y = vy
+    const speed = Math.sqrt(vx * vx + vy * vy)
+    if (speed > 0.001) {
+      this.facingX = vx / speed
+      this.facingY = vy / speed
+    }
   }
 
   applyFriction(friction) {
@@ -82,6 +89,8 @@ export class Player {
     this.setPos(x, y)
     this.velocity.x = 0
     this.velocity.y = 0
+    this.facingX = 1
+    this.facingY = 0
     this.deselect()
   }
 

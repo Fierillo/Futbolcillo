@@ -11,7 +11,7 @@ export class InputManager {
     this.isDragging = false
     this.enabled = true
     this.currentTeam = 'azul'
-    this.maxDragDistance = pitch.width * 0.2
+    this.maxDragDistance = Math.min(pitch.pixelWidth * 0.25, 200)
 
     this.kbAngle = 0
     this.kbPower = 0.5
@@ -123,7 +123,7 @@ export class InputManager {
     if (!this.selectedPlayer) return
 
     let changed = false
-    const fast = this.keys.ctrl.isDown ? 3 : 1
+    const fast = (this.keys.ctrl && this.keys.ctrl.isDown) ? 3 : 1
 
     if (this.keys.left.isDown) {
       this.kbAngle -= 0.03 * fast
@@ -179,10 +179,15 @@ export class InputManager {
     const nx = Math.cos(this.kbAngle)
     const ny = Math.sin(this.kbAngle)
 
-    player.setVelocity(
-      nx * player.maxSpeed * this.kbPower,
-      ny * player.maxSpeed * this.kbPower
-    )
+    let vx = nx * player.maxSpeed * this.kbPower
+    let vy = ny * player.maxSpeed * this.kbPower
+
+    if (this.pitch.isPortrait) {
+      vx = ny * player.maxSpeed * this.kbPower
+      vy = -nx * player.maxSpeed * this.kbPower
+    }
+
+    player.setVelocity(vx, vy)
 
     if (this.onShoot) {
       this.onShoot(player)
@@ -195,6 +200,7 @@ export class InputManager {
   executePointerShot(pointer) {
     const player = this.selectedPlayer
     if (!player) return
+    if (player.team !== this.currentTeam) return
 
     const dx = player.sprite.x - pointer.x
     const dy = player.sprite.y - pointer.y
@@ -207,12 +213,17 @@ export class InputManager {
 
     const nx = dx / dist
     const ny = dy / dist
-    const power = Math.min(dist / (this.maxDragDistance * this.pitch.scale), 1)
+    const power = Math.min(dist / this.maxDragDistance, 1)
 
-    player.setVelocity(
-      nx * player.maxSpeed * power,
-      ny * player.maxSpeed * power
-    )
+    let vx = nx * player.maxSpeed * power
+    let vy = ny * player.maxSpeed * power
+
+    if (this.pitch.isPortrait) {
+      vx = ny * player.maxSpeed * power
+      vy = -nx * player.maxSpeed * power
+    }
+
+    player.setVelocity(vx, vy)
 
     if (this.onShoot) {
       this.onShoot(player)
@@ -237,7 +248,7 @@ export class InputManager {
 
     const nx = dx / dist
     const ny = dy / dist
-    const power = Math.min(dist / (this.maxDragDistance * this.pitch.scale), 1)
+    const power = Math.min(dist / this.maxDragDistance, 1)
 
     this._drawArrow(ppx, ppy, nx, ny, power)
   }

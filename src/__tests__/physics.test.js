@@ -6,8 +6,18 @@ function createMockEntity(x, y, radius, team = 'rojo', isGoalkeeper = false) {
   return {
     x, y, radius, team, isGoalkeeper,
     velocity: { x: 0, y: 0 },
+    facingX: 1,
+    facingY: 0,
     setPos(nx, ny) { this.x = nx; this.y = ny },
-    setVelocity(vx, vy) { this.velocity.x = vx; this.velocity.y = vy },
+    setVelocity(vx, vy) {
+      this.velocity.x = vx
+      this.velocity.y = vy
+      const speed = Math.sqrt(vx * vx + vy * vy)
+      if (speed > 0.001) {
+        this.facingX = vx / speed
+        this.facingY = vy / speed
+      }
+    },
     applyFriction(f) {
       this.velocity.x *= (1 - f)
       this.velocity.y *= (1 - f)
@@ -26,7 +36,7 @@ function createMockEntity(x, y, radius, team = 'rojo', isGoalkeeper = false) {
 
 describe('PhysicsEngine', () => {
   let engine
-  const bounds = { x: 0, y: 0, width: 132, height: 60 }
+  const bounds = { x: 0, y: 0, width: 100, height: 64 }
 
   beforeEach(() => {
     engine = new PhysicsEngine(bounds)
@@ -35,39 +45,37 @@ describe('PhysicsEngine', () => {
   describe('reset()', () => {
     it('resets foul and goal flags', () => {
       engine.foulOccurred = true
-      engine.ballTouchedBy = {}
       engine.goalDetected = {}
       engine.reset()
       expect(engine.foulOccurred).toBe(false)
-      expect(engine.ballTouchedBy).toBeNull()
       expect(engine.goalDetected).toBeNull()
     })
   })
 
   describe('simulate()', () => {
     it('applies friction and movement to active entities', () => {
-      const ball = createMockEntity(66, 30, 0.6)
+      const ball = createMockEntity(50, 32, 0.6)
       ball.setVelocity(0.5, 0)
       const players = []
 
       engine.simulate(1, ball, players, [])
 
       expect(ball.velocity.x).toBeLessThan(0.5)
-      expect(ball.x).toBeGreaterThan(66)
+      expect(ball.x).toBeGreaterThan(50)
     })
 
     it('does not move stopped entities', () => {
-      const ball = createMockEntity(66, 30, 0.6)
+      const ball = createMockEntity(50, 32, 0.6)
       const players = []
 
       engine.simulate(1, ball, players, [])
 
-      expect(ball.x).toBe(66)
-      expect(ball.y).toBe(30)
+      expect(ball.x).toBe(50)
+      expect(ball.y).toBe(32)
     })
 
     it('returns allStopped when no movement', () => {
-      const ball = createMockEntity(66, 30, 0.6)
+      const ball = createMockEntity(50, 32, 0.6)
       const players = []
 
       const result = engine.simulate(1, ball, players, [])
@@ -76,7 +84,7 @@ describe('PhysicsEngine', () => {
     })
 
     it('returns allStopped=false when moving', () => {
-      const ball = createMockEntity(66, 30, 0.6)
+      const ball = createMockEntity(50, 32, 0.6)
       ball.setVelocity(0.5, 0)
       const players = []
 
@@ -86,42 +94,23 @@ describe('PhysicsEngine', () => {
     })
   })
 
-  describe('resolveWallCollisions()', () => {
-    it('bounces entity off left wall', () => {
-      const ball = createMockEntity(0.5, 30, 0.6)
-      ball.setVelocity(-0.3, 0)
+  describe('clampBallAbsolute()', () => {
+    it('prevents ball from escaping left', () => {
+      const ball = createMockEntity(-3, 32, 0.6)
+      ball.setVelocity(-0.5, 0)
 
-      engine.resolveWallCollisions(ball, [])
+      engine.clampBallAbsolute(ball)
 
-      expect(ball.x).toBe(0.6)
-      expect(ball.velocity.x).toBeGreaterThan(0)
+      expect(ball.x).toBeGreaterThanOrEqual(-2.44 + 0.6)
     })
 
-    it('bounces entity off right wall', () => {
-      const ball = createMockEntity(131.5, 30, 0.6)
-      ball.setVelocity(0.3, 0)
+    it('prevents ball from escaping right', () => {
+      const ball = createMockEntity(103, 32, 0.6)
+      ball.setVelocity(0.5, 0)
 
-      engine.resolveWallCollisions(ball, [])
+      engine.clampBallAbsolute(ball)
 
-      expect(ball.velocity.x).toBeLessThan(0)
-    })
-
-    it('bounces entity off top wall', () => {
-      const ball = createMockEntity(66, 0.5, 0.6)
-      ball.setVelocity(0, -0.3)
-
-      engine.resolveWallCollisions(ball, [])
-
-      expect(ball.velocity.y).toBeGreaterThan(0)
-    })
-
-    it('bounces entity off bottom wall', () => {
-      const ball = createMockEntity(66, 59.5, 0.6)
-      ball.setVelocity(0, 0.3)
-
-      engine.resolveWallCollisions(ball, [])
-
-      expect(ball.velocity.y).toBeLessThan(0)
+      expect(ball.x).toBeLessThanOrEqual(100 + 2.44 - 0.6)
     })
   })
 
@@ -155,26 +144,14 @@ describe('PhysicsEngine', () => {
       expect(dist).toBeGreaterThanOrEqual(3.4)
     })
 
-    it('detects foul when player touches opponent without ball', () => {
+    it('detects foul when rival discs collide', () => {
       const a = createMockEntity(10, 10, 1.8, 'rojo')
       const b = createMockEntity(12, 10, 1.8, 'azul')
       a.setVelocity(0.3, 0)
-      engine.ballTouchedBy = null
 
       engine.circleCollision(a, b, 'player', 'player')
 
       expect(engine.foulOccurred).toBe(true)
-    })
-
-    it('no foul if attacking player touched ball first', () => {
-      const a = createMockEntity(10, 10, 1.8, 'rojo')
-      const b = createMockEntity(12, 10, 1.8, 'azul')
-      a.setVelocity(0.3, 0)
-      engine.ballTouchedBy = a
-
-      engine.circleCollision(a, b, 'player', 'player')
-
-      expect(engine.foulOccurred).toBe(false)
     })
 
     it('no foul between same team players', () => {
@@ -186,22 +163,13 @@ describe('PhysicsEngine', () => {
 
       expect(engine.foulOccurred).toBe(false)
     })
-
-    it('sets ballTouchedBy on player-ball collision', () => {
-      const player = createMockEntity(10, 10, 1.8, 'rojo')
-      const ball = createMockEntity(12, 10, 0.6)
-      player.setVelocity(0.3, 0)
-
-      engine.circleCollision(player, ball, 'player', 'ball')
-
-      expect(engine.ballTouchedBy).toBe(player)
-    })
   })
 
   describe('resolvePlayerBallCollision()', () => {
-    it('applies kick ratio when hitting ball', () => {
+    it('applies kick ratio when hitting fast ball', () => {
       const player = createMockEntity(10, 10, 1.8, 'rojo')
       const ball = createMockEntity(12, 10, 0.6)
+      ball.setVelocity(-0.5, 0)
       player.setVelocity(0.63, 0)
 
       const hit = engine.resolvePlayerBallCollision(player, ball)
@@ -210,10 +178,10 @@ describe('PhysicsEngine', () => {
       expect(ball.velocity.x).toBeGreaterThan(0)
     })
 
-    it('stationary player bounces ball without kickRatio', () => {
+    it('stationary player bounces fast ball', () => {
       const player = createMockEntity(10, 10, 1.8, 'rojo')
       const ball = createMockEntity(12, 10, 0.6)
-      ball.setVelocity(-0.1, 0)
+      ball.setVelocity(-0.5, 0)
 
       const hit = engine.resolvePlayerBallCollision(player, ball)
 
@@ -224,6 +192,7 @@ describe('PhysicsEngine', () => {
     it('reduces player velocity after hitting', () => {
       const player = createMockEntity(10, 10, 1.8, 'rojo')
       const ball = createMockEntity(12, 10, 0.6)
+      ball.setVelocity(-0.5, 0)
       player.setVelocity(0.63, 0)
 
       engine.resolvePlayerBallCollision(player, ball)
@@ -236,6 +205,8 @@ describe('PhysicsEngine', () => {
       const field = createMockEntity(30, 10, 1.8, 'rojo', false)
       const ball1 = createMockEntity(12, 10, 0.6)
       const ball2 = createMockEntity(32, 10, 0.6)
+      ball1.setVelocity(-0.5, 0)
+      ball2.setVelocity(-0.5, 0)
       goalkeeper.setVelocity(0.63, 0)
       field.setVelocity(0.63, 0)
 
@@ -273,7 +244,7 @@ describe('PhysicsEngine', () => {
       const goalArea = { x: -2.44, y: 28, width: 2.44, height: 7.32, direction: 'left' }
       engine.goalAreas = [goalArea]
 
-      const ball = createMockEntity(66, 30, 0.6)
+      const ball = createMockEntity(50, 32, 0.6)
       const goal = { bounds: { x: 0, y: 28, width: 2.44, height: 7.32 }, team: 'rojo', contains: () => false }
 
       engine.detectGoal(ball, [goal])
@@ -341,7 +312,7 @@ describe('PhysicsEngine', () => {
 
   describe('full simulation flow', () => {
     it('ball stops after several frames', () => {
-      const ball = createMockEntity(66, 30, 0.6)
+      const ball = createMockEntity(50, 32, 0.6)
       ball.setVelocity(0.5, 0)
       const players = []
 
@@ -356,11 +327,24 @@ describe('PhysicsEngine', () => {
     it('foul is detected during simulation', () => {
       const playerA = createMockEntity(10, 10, 1.8, 'rojo')
       const playerB = createMockEntity(13, 10, 1.8, 'azul')
-      const ball = createMockEntity(66, 30, 0.6)
+      const ball = createMockEntity(50, 32, 0.6)
 
       playerA.setVelocity(0.63, 0)
 
       const result = engine.simulate(1, ball, [playerA, playerB], [])
+
+      expect(result.foul).toBe(true)
+    })
+
+    it('keeps foul when attacker hits rival in corner', () => {
+      const attacker = createMockEntity(8, 32, 1.8, 'rojo')
+      const defender = createMockEntity(4.5, 32, 1.8, 'azul')
+      const ball = createMockEntity(2.5, 32, 0.6)
+
+      attacker.setVelocity(-0.63, 0)
+      defender.setVelocity(0, 0)
+
+      const result = engine.simulate(1, ball, [attacker, defender], [])
 
       expect(result.foul).toBe(true)
     })
