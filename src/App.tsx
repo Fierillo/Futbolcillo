@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Trophy, RotateCcw, Info, X, Volume2, VolumeX } from 'lucide-react';
+import { Goal, Trophy, RotateCcw, Info, X, Volume2, VolumeX } from 'lucide-react';
 import TejoCanvas from './game/TejoCanvas';
+import { preparePhaseOneInfrastructure, usePhaseOneBoot } from './app/use-phase-one-boot';
 import {
   createInitialState,
   updateGame,
@@ -9,15 +10,34 @@ import {
   handleMouseUp,
 } from './game/engine';
 import { GameState, FIELD_WIDTH, FIELD_HEIGHT } from './game/types';
+import { NostrGatewayModal } from './nostr/NostrGatewayModal';
+import { useNostrSession } from './nostr/session-store';
+import { GlobalSyncStatus } from './online/GlobalSyncStatus';
+import { useSyncStatus } from './online/sync-store';
 
 export default function App() {
   const [gameState, setGameState] = useState<GameState>(createInitialState);
   const [showHelp, setShowHelp] = useState(true);
+  const [showNostrGateway, setShowNostrGateway] = useState(false);
   const [muted, setMuted] = useState(false);
   const [scale, setScale] = useState(1);
   const gameStateRef = useRef<GameState>(gameState);
   const animFrameRef = useRef<number>(0);
   const containerRef = useRef<HTMLDivElement>(null);
+  const { setSyncState } = useSyncStatus();
+  const { session, refreshProfile } = useNostrSession();
+
+  usePhaseOneBoot();
+
+  useEffect(() => {
+    if (session.status === 'connected') {
+      setSyncState({
+        status: 'ready',
+        label: 'Nostr activo',
+        detail: `Perfil listo para ${session.profile?.name || 'tu usuario'}.`,
+      });
+    }
+  }, [session.status, session.profile, setSyncState]);
 
   useEffect(() => {
     gameStateRef.current = gameState;
@@ -28,7 +48,8 @@ export default function App() {
     const updateScale = () => {
       if (!containerRef.current) return;
       const containerWidth = containerRef.current.clientWidth - 32;
-      const containerHeight = window.innerHeight - 200;
+      const containerTop = containerRef.current.getBoundingClientRect().top;
+      const containerHeight = Math.max(window.innerHeight - containerTop - 24, 240);
       const scaleX = containerWidth / FIELD_WIDTH;
       const scaleY = containerHeight / FIELD_HEIGHT;
       setScale(Math.min(scaleX, scaleY, 1));
@@ -117,9 +138,39 @@ export default function App() {
     setGameState(createInitialState());
   };
 
-  const turnText = gameState.turn === 'home' ? 'LOCAL' : 'VISITANTE';
+  const retrySync = async () => {
+      setSyncState({
+        status: 'syncing',
+        label: 'Reintentando',
+        detail: 'Revisando caché local y capa Nostr.',
+      });
+
+    try {
+      const nextState = await preparePhaseOneInfrastructure();
+      setSyncState(nextState);
+    } catch {
+      setSyncState({
+        status: 'error',
+        label: 'Caché local',
+        detail: 'No se pudo preparar la infraestructura Nostr local.',
+      });
+    }
+  };
+
+  const turnText = gameState.turn === 'home' ? 'LOCAL' : 'RIVAL';
   const turnColor = gameState.turn === 'home' ? 'text-blue-400' : 'text-red-400';
-  const phaseText = gameState.phase === 'aiming' ? 'Apunta y lanza' : 'En juego...';
+  const phaseText = gameState.phase === 'aiming' ? 'Apuntá y pateá' : 'En juego...';
+  const shortenPubkey = (value: string) => {
+    if (!value) return '';
+    if (value.length <= 16) return value;
+    return `${value.slice(0, 8)}...${value.slice(-6)}`;
+  };
+  const homeIdentity = session.profile;
+  const awayIdentity = {
+    name: 'Máquina',
+    pubkey: 'training-bot',
+    avatarUrl: 'https://api.dicebear.com/9.x/bottts/svg?seed=training-bot',
+  };
 
   return (
     <div className="min-h-screen bg-stone-900 text-white flex flex-col items-center select-none">
@@ -129,9 +180,20 @@ export default function App() {
           <h1 className="title-font text-4xl leading-none tracking-[0.14em] text-amber-400 uppercase drop-shadow-[0_2px_0_rgba(0,0,0,0.35)] sm:text-5xl">
             Futbolcillo
           </h1>
+          <p className="mt-1 text-xs uppercase tracking-[0.25em] text-stone-500">
+            {session.status === 'connected' ? `Identidad lista: ${session.method === 'nip07' ? 'NIP-07' : 'Bunker'}` : 'Modo entrenamiento activo'}
+          </p>
         </div>
 
         <div className="flex items-center gap-2">
+          <GlobalSyncStatus onRetry={retrySync} />
+          <button
+            onClick={() => setShowNostrGateway(true)}
+            className="flex items-center gap-2 rounded-lg bg-emerald-700 px-3 py-2 text-sm font-bold uppercase tracking-wider text-white transition-colors hover:bg-emerald-600"
+          >
+            <Goal size={16} />
+            Quiero Más
+          </button>
           <button
             onClick={() => setMuted(!muted)}
             className="p-2 rounded-lg bg-stone-800 hover:bg-stone-700 transition-colors"
@@ -155,31 +217,37 @@ export default function App() {
 
       {/* Scoreboard */}
       <div className="w-full max-w-5xl px-4 mb-3">
-        <div className="bg-stone-800 rounded-xl p-4 flex items-center justify-between shadow-lg">
-          <div className="flex items-center gap-3">
-            <div className="w-12 h-12 rounded-full bg-blue-600 flex items-center justify-center shadow-md">
-              <span className="text-lg font-bold">L</span>
+        <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-3 rounded-xl bg-stone-800 p-4 shadow-lg">
+          <div className="flex min-w-0 items-center gap-3 justify-self-start">
+            <img
+              src={homeIdentity?.avatarUrl || 'https://api.dicebear.com/9.x/shapes/svg?seed=local-player'}
+              alt={homeIdentity?.name || 'Local'}
+              className="w-12 h-12 rounded-full border border-blue-500/40 bg-blue-950 object-cover shadow-md"
+            />
+            <div className="min-w-0">
+              <p className="truncate text-sm font-bold uppercase tracking-wider text-stone-100">{homeIdentity?.name || 'Local'}</p>
+              <p className="truncate text-[10px] uppercase tracking-[0.2em] text-stone-500">{shortenPubkey(homeIdentity?.pubkey || 'Sin login')}</p>
             </div>
-            <div className="text-center">
-              <p className="text-xs text-stone-400 uppercase tracking-wider">Local</p>
-              <p className="text-3xl font-bold text-blue-400">{gameState.score.home}</p>
+            <div className="rounded-lg bg-stone-900/60 px-3 py-1">
+              <p className="text-3xl font-bold leading-none text-blue-400">{gameState.score.home}</p>
             </div>
           </div>
 
-          <div className="text-center px-6">
-            <p className="text-xs text-stone-500 uppercase tracking-widest mb-1">Turno</p>
-            <p className={`text-sm font-bold ${turnColor}`}>{turnText}</p>
-            <p className="text-xs text-stone-500 mt-1">{phaseText}</p>
+          <div className="min-w-[140px] text-center px-2">
+            <p className="mb-1 text-[10px] uppercase tracking-[0.3em] text-stone-500">Turno</p>
+            <p className={`text-base font-bold uppercase tracking-widest ${turnColor}`}>{turnText}</p>
+            <p className="mt-1 text-xs text-stone-500">{phaseText}</p>
           </div>
 
-          <div className="flex items-center gap-3">
-            <div className="text-center">
-              <p className="text-xs text-stone-400 uppercase tracking-wider">Visitante</p>
-              <p className="text-3xl font-bold text-red-400">{gameState.score.away}</p>
+          <div className="flex min-w-0 items-center justify-self-end gap-3">
+            <div className="rounded-lg bg-stone-900/60 px-3 py-1">
+              <p className="text-3xl font-bold leading-none text-red-400">{gameState.score.away}</p>
             </div>
-            <div className="w-12 h-12 rounded-full bg-red-600 flex items-center justify-center shadow-md">
-              <span className="text-lg font-bold">V</span>
+            <div className="min-w-0 text-right">
+              <p className="truncate text-sm font-bold uppercase tracking-wider text-stone-100">{awayIdentity.name}</p>
+              <p className="truncate text-[10px] uppercase tracking-[0.2em] text-stone-500">{shortenPubkey(awayIdentity.pubkey)}</p>
             </div>
+            <img src={awayIdentity.avatarUrl} alt={awayIdentity.name} className="w-12 h-12 rounded-full border border-red-500/40 bg-red-950 object-cover shadow-md" />
           </div>
         </div>
       </div>
@@ -195,13 +263,33 @@ export default function App() {
         />
       </div>
 
+      {showNostrGateway && <NostrGatewayModal onClose={() => setShowNostrGateway(false)} />}
+
+      {session.status === 'connected' && (
+        <div className="w-full max-w-5xl px-4 pb-2">
+          <div className="flex items-center justify-between rounded-xl border border-stone-700 bg-stone-800/70 px-4 py-3 text-sm text-stone-300">
+            <p>
+              Conectado como <span className="font-semibold text-stone-100">{session.profile?.name}</span>. Tu caché por
+              pubkey ya puede cargar perfil, desafíos y apuestas.
+            </p>
+            <button
+              type="button"
+              onClick={() => void refreshProfile()}
+              className="rounded-lg bg-stone-700 px-3 py-2 font-semibold text-white transition-colors hover:bg-stone-600"
+            >
+              Actualizar perfil
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Winner overlay */}
       {gameState.winner && (
         <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
           <div className="bg-stone-800 rounded-2xl p-8 text-center shadow-2xl max-w-sm mx-4 border border-stone-700">
             <Trophy size={64} className="mx-auto mb-4 text-amber-400" />
             <h2 className="text-3xl font-bold mb-2">
-              {gameState.winner === 'home' ? '¡LOCAL CAMPEÓN!' : '¡VISITANTE CAMPEÓN!'}
+              {gameState.winner === 'home' ? '¡LOCAL CAMPEÓN!' : '¡RIVAL CAMPEÓN!'}
             </h2>
             <p className="text-stone-400 mb-6">
               {gameState.score.home} - {gameState.score.away}
@@ -210,7 +298,7 @@ export default function App() {
               onClick={resetGame}
               className="px-6 py-3 bg-amber-600 hover:bg-amber-500 rounded-lg font-bold transition-colors"
             >
-              Jugar de Nuevo
+              Jugar de nuevo
             </button>
           </div>
         </div>
@@ -221,7 +309,7 @@ export default function App() {
         <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
           <div className="bg-stone-800 rounded-2xl p-6 max-w-md mx-4 border border-stone-700 shadow-2xl">
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-xl font-bold text-amber-400">¿Cómo Jugar?</h2>
+              <h2 className="text-xl font-bold text-amber-400">¿Cómo jugar?</h2>
               <button
                 onClick={() => setShowHelp(false)}
                 className="p-1 hover:bg-stone-700 rounded transition-colors"
@@ -233,23 +321,23 @@ export default function App() {
             <div className="space-y-3 text-sm text-stone-300">
               <div className="flex gap-3">
                 <div className="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center shrink-0 text-xs font-bold">1</div>
-                <p>Selecciona un jugador de tu equipo (arrastra desde el jugador).</p>
+                <p>Hacé click en uno de tus jugadores.</p>
               </div>
               <div className="flex gap-3">
                 <div className="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center shrink-0 text-xs font-bold">2</div>
-                <p>Apunta en la dirección contraria a donde quieres lanzar (como una honda).</p>
+                <p>Mantené el click y arrastrá para apuntar.</p>
               </div>
               <div className="flex gap-3">
                 <div className="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center shrink-0 text-xs font-bold">3</div>
-                <p>Suelta para lanzar el tejo. Mientras más lejos arrastres, más fuerte será el tiro.</p>
+                <p>La flecha te marca para dónde va a salir el disparo.</p>
               </div>
               <div className="flex gap-3">
                 <div className="w-8 h-8 rounded-full bg-emerald-600 flex items-center justify-center shrink-0 text-xs font-bold">4</div>
-                <p>Usa la flecha como guía: marca la dirección real del disparo y cambia de color según la potencia.</p>
+                <p>Soltá el click para patear. Cuanto más arrastres, más fuerza va a tener.</p>
               </div>
               <div className="flex gap-3">
                 <div className="w-8 h-8 rounded-full bg-amber-600 flex items-center justify-center shrink-0 text-xs font-bold">⚽</div>
-                <p>Mete el tejo dorado en el arco contrario para marcar gol. ¡Primero en 5 goles gana!</p>
+                <p>Meté la pelota en el arco rival. El primero en 3 goles gana.</p>
               </div>
             </div>
 
@@ -257,7 +345,7 @@ export default function App() {
               onClick={() => setShowHelp(false)}
               className="w-full mt-5 py-2.5 bg-amber-600 hover:bg-amber-500 rounded-lg font-bold transition-colors"
             >
-              ¡Entendido!
+              Dale
             </button>
           </div>
         </div>
@@ -265,7 +353,7 @@ export default function App() {
 
       {/* Footer hint */}
       <div className="pb-3 text-xs text-stone-500">
-        Arrastra y suelta para lanzar • Fútbol de precisión por turnos
+        Arrastrá y soltá para patear • Fútbol de precisión por turnos
       </div>
     </div>
   );

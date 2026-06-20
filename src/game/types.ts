@@ -67,4 +67,4 @@ export const FRICTION = 0.985;
 export const STOP_THRESHOLD = 0.08;
 export const MAX_SHOOT_POWER = 18;
 export const MOVEMENT_SCALE = 0.5;
-export const WIN_SCORE = 5;
+export const WIN_SCORE = 3;

@@ -317,7 +317,7 @@ export function updateGame(state: GameState, _dt: number): GameState {
   const goalScorer = checkGoal(state);
   if (goalScorer) {
     state.score[goalScorer]++;
-    state.message = `¡GOL DE ${goalScorer === 'home' ? 'LOCAL' : 'VISITANTE'}!`;
+    state.message = `¡GOL DE ${goalScorer === 'home' ? 'LOCAL' : 'RIVAL'}!`;
     state.messageTimer = 120;
     state.cameraShake = 12;
     spawnParticles(state, ball.pos, 50, '#fbbf24', 8, 5);
@@ -325,7 +325,7 @@ export function updateGame(state: GameState, _dt: number): GameState {
 
     if (state.score[goalScorer] >= WIN_SCORE) {
       state.winner = goalScorer;
-      state.message = `¡${goalScorer === 'home' ? 'LOCAL' : 'VISITANTE'} CAMPEÓN!`;
+      state.message = `¡${goalScorer === 'home' ? 'LOCAL' : 'RIVAL'} CAMPEÓN!`;
     }
 
     resetPositions(state, goalScorer);
