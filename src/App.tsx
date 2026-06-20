@@ -125,14 +125,10 @@ export default function App() {
     <div className="min-h-screen bg-stone-900 text-white flex flex-col items-center select-none">
       {/* Header */}
       <header className="w-full max-w-5xl px-4 py-4 flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-full bg-amber-600 flex items-center justify-center">
-            <span className="text-xl font-bold">T</span>
-          </div>
-          <div>
-            <h1 className="text-xl font-bold text-amber-400">Fútbol Tejo</h1>
-            <p className="text-xs text-stone-400">Juego tradicional colombiano</p>
-          </div>
+        <div>
+          <h1 className="title-font text-4xl leading-none tracking-[0.14em] text-amber-400 uppercase drop-shadow-[0_2px_0_rgba(0,0,0,0.35)] sm:text-5xl">
+            Futbolcillo
+          </h1>
         </div>
 
         <div className="flex items-center gap-2">
