@@ -50,7 +50,6 @@ export default function App() {
         const next = { ...prev };
         // Deep copy arrays
         next.players = prev.players.map((p) => ({ ...p }));
-        next.mecheros = prev.mecheros.map((m) => ({ ...m }));
         next.particles = prev.particles.map((p) => ({ ...p }));
         next.ball = { ...prev.ball, trail: [...prev.ball.trail] };
         next.goals = [...prev.goals];
@@ -73,7 +72,6 @@ export default function App() {
     setGameState((prev) => {
       const next = { ...prev };
       next.players = prev.players.map((p) => ({ ...p }));
-      next.mecheros = prev.mecheros.map((m) => ({ ...m }));
       next.particles = prev.particles.map((p) => ({ ...p }));
       next.ball = { ...prev.ball, trail: [...prev.ball.trail] };
       next.goals = [...prev.goals];
@@ -89,7 +87,6 @@ export default function App() {
     setGameState((prev) => {
       const next = { ...prev };
       next.players = prev.players.map((p) => ({ ...p }));
-      next.mecheros = prev.mecheros.map((m) => ({ ...m }));
       next.particles = prev.particles.map((p) => ({ ...p }));
       next.ball = { ...prev.ball, trail: [...prev.ball.trail] };
       next.goals = [...prev.goals];
@@ -105,7 +102,6 @@ export default function App() {
     setGameState((prev) => {
       const next = { ...prev };
       next.players = prev.players.map((p) => ({ ...p }));
-      next.mecheros = prev.mecheros.map((m) => ({ ...m }));
       next.particles = prev.particles.map((p) => ({ ...p }));
       next.ball = { ...prev.ball, trail: [...prev.ball.trail] };
       next.goals = [...prev.goals];
@@ -252,8 +248,8 @@ export default function App() {
                 <p>Suelta para lanzar el tejo. Mientras más lejos arrastres, más fuerte será el tiro.</p>
               </div>
               <div className="flex gap-3">
-                <div className="w-8 h-8 rounded-full bg-red-600 flex items-center justify-center shrink-0 text-xs font-bold">!</div>
-                <p>¡Evita los <strong className="text-red-400">mecheros</strong> en el centro! Explotan al contacto y empujan todo.</p>
+                <div className="w-8 h-8 rounded-full bg-emerald-600 flex items-center justify-center shrink-0 text-xs font-bold">4</div>
+                <p>Usa la flecha como guía: marca la dirección real del disparo y cambia de color según la potencia.</p>
               </div>
               <div className="flex gap-3">
                 <div className="w-8 h-8 rounded-full bg-amber-600 flex items-center justify-center shrink-0 text-xs font-bold">⚽</div>
@@ -273,7 +269,7 @@ export default function App() {
 
       {/* Footer hint */}
       <div className="pb-3 text-xs text-stone-500">
-        Arrastra y suelta para lanzar • Física de arcilla tipo tejo
+        Arrastra y suelta para lanzar • Fútbol de precisión por turnos
       </div>
     </div>
   );

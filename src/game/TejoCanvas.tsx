@@ -26,46 +26,83 @@ export default function TejoCanvas({ gameState, onMouseDown, onMouseMove, onMous
     ctx.save();
     ctx.translate(shakeX, shakeY);
 
-    // Background - clay field
-    ctx.fillStyle = '#8B4513';
+    // Background - grass field
+    ctx.fillStyle = '#2d8f4e';
     ctx.fillRect(0, 0, w, h);
 
-    // Clay texture
-    ctx.fillStyle = '#7a3c10';
-    for (let i = 0; i < 40; i++) {
+    // Grass texture
+    ctx.fillStyle = 'rgba(23, 111, 54, 0.35)';
+    for (let i = 0; i < 70; i++) {
       const rx = ((i * 137.5) % w);
       const ry = ((i * 89.7) % h);
       ctx.beginPath();
-      ctx.arc(rx, ry, 2 + (i % 4), 0, Math.PI * 2);
+      ctx.arc(rx, ry, 2 + (i % 3), 0, Math.PI * 2);
       ctx.fill();
     }
 
     // Border
-    ctx.strokeStyle = '#5c2e0b';
+    ctx.strokeStyle = '#1a5e30';
     ctx.lineWidth = 6;
     ctx.strokeRect(0, 0, w, h);
 
     // Center line
-    ctx.strokeStyle = '#a0522d';
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.45)';
     ctx.lineWidth = 3;
-    ctx.setLineDash([15, 10]);
     ctx.beginPath();
     ctx.moveTo(w / 2, 0);
     ctx.lineTo(w / 2, h);
     ctx.stroke();
-    ctx.setLineDash([]);
 
     // Center circle
-    ctx.strokeStyle = '#a0522d';
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
     ctx.lineWidth = 3;
     ctx.beginPath();
     ctx.arc(w / 2, h / 2, 70, 0, Math.PI * 2);
     ctx.stroke();
 
     // Center dot
-    ctx.fillStyle = '#a0522d';
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
     ctx.beginPath();
     ctx.arc(w / 2, h / 2, 5, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Penalty areas
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
+    ctx.lineWidth = 3;
+
+    const penaltyAreaWidth = 180;
+    const penaltyAreaHeight = 280;
+    const penaltyAreaY = (h - penaltyAreaHeight) / 2;
+
+    ctx.strokeRect(0, penaltyAreaY, penaltyAreaWidth, penaltyAreaHeight);
+    ctx.strokeRect(w - penaltyAreaWidth, penaltyAreaY, penaltyAreaWidth, penaltyAreaHeight);
+
+    // Penalty arcs
+    const penaltyMarkOffset = 120;
+    const penaltyArcRadius = 55;
+    const penaltyArcAngle = Math.acos((penaltyAreaWidth - penaltyMarkOffset) / penaltyArcRadius);
+
+    ctx.beginPath();
+    ctx.arc(penaltyMarkOffset, h / 2, penaltyArcRadius, -penaltyArcAngle, penaltyArcAngle);
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.arc(w - penaltyMarkOffset, h / 2, penaltyArcRadius, Math.PI - penaltyArcAngle, Math.PI + penaltyArcAngle);
+    ctx.stroke();
+
+    // Goal areas
+    const goalAreaWidth = 80;
+    const goalAreaHeight = 160;
+    const goalAreaY = (h - goalAreaHeight) / 2;
+
+    ctx.strokeRect(0, goalAreaY, goalAreaWidth, goalAreaHeight);
+    ctx.strokeRect(w - goalAreaWidth, goalAreaY, goalAreaWidth, goalAreaHeight);
+
+    // Penalty marks
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+    ctx.beginPath();
+    ctx.arc(penaltyMarkOffset, h / 2, 4, 0, Math.PI * 2);
+    ctx.arc(w - penaltyMarkOffset, h / 2, 4, 0, Math.PI * 2);
     ctx.fill();
 
     // Goals
@@ -90,36 +127,6 @@ export default function TejoCanvas({ gameState, onMouseDown, onMouseMove, onMous
         ctx.moveTo(goal.x + i, goal.y);
         ctx.lineTo(goal.x + i, goal.y + goal.height);
         ctx.stroke();
-      }
-    }
-
-    // Mecheros
-    for (const m of gameState.mecheros) {
-      if (m.exploded) {
-        const alpha = m.explodeTimer / 60;
-        ctx.fillStyle = `rgba(239, 68, 68, ${alpha})`;
-        ctx.beginPath();
-        ctx.arc(m.pos.x, m.pos.y, m.radius + (60 - m.explodeTimer) * 0.5, 0, Math.PI * 2);
-        ctx.fill();
-      } else {
-        // Triangle shape for mechero
-        ctx.fillStyle = '#dc2626';
-        ctx.beginPath();
-        ctx.moveTo(m.pos.x, m.pos.y - m.radius);
-        ctx.lineTo(m.pos.x - m.radius, m.pos.y + m.radius);
-        ctx.lineTo(m.pos.x + m.radius, m.pos.y + m.radius);
-        ctx.closePath();
-        ctx.fill();
-
-        ctx.strokeStyle = '#fca5a5';
-        ctx.lineWidth = 2;
-        ctx.stroke();
-
-        // Sparkle
-        ctx.fillStyle = '#fbbf24';
-        ctx.beginPath();
-        ctx.arc(m.pos.x, m.pos.y + 4, 4, 0, Math.PI * 2);
-        ctx.fill();
       }
     }
 
@@ -196,14 +203,19 @@ export default function TejoCanvas({ gameState, onMouseDown, onMouseMove, onMous
       }
     }
 
-    // Drag line
+    // Shot guide
     if (gameState.dragStart && gameState.dragCurrent && gameState.selectedPlayer !== null) {
       const player = gameState.players[gameState.selectedPlayer];
       const dx = gameState.dragStart.x - gameState.dragCurrent.x;
       const dy = gameState.dragStart.y - gameState.dragCurrent.y;
-      const power = Math.sqrt(dx * dx + dy * dy) * 0.15;
+      const dragDistance = Math.sqrt(dx * dx + dy * dy);
+      const power = dragDistance * 0.15;
       const maxPower = 18;
       const ratio = Math.min(power / maxPower, 1);
+      const guideLength = 40 + ratio * 80;
+      const directionLength = dragDistance || 1;
+      const guideEndX = player.pos.x + (dx / directionLength) * guideLength;
+      const guideEndY = player.pos.y + (dy / directionLength) * guideLength;
 
       // Power indicator color
       const r = Math.floor(255 * ratio);
@@ -212,25 +224,24 @@ export default function TejoCanvas({ gameState, onMouseDown, onMouseMove, onMous
 
       ctx.strokeStyle = color;
       ctx.lineWidth = 3 + ratio * 3;
-      ctx.setLineDash([8, 6]);
       ctx.beginPath();
       ctx.moveTo(player.pos.x, player.pos.y);
-      ctx.lineTo(gameState.dragCurrent.x, gameState.dragCurrent.y);
+      ctx.lineTo(guideEndX, guideEndY);
       ctx.stroke();
-      ctx.setLineDash([]);
 
       // Arrow head
       const angle = Math.atan2(dy, dx);
+      const arrowSize = 12 + ratio * 6;
       ctx.fillStyle = color;
       ctx.beginPath();
-      ctx.moveTo(player.pos.x, player.pos.y);
+      ctx.moveTo(guideEndX, guideEndY);
       ctx.lineTo(
-        player.pos.x - Math.cos(angle - 0.3) * 15,
-        player.pos.y - Math.sin(angle - 0.3) * 15
+        guideEndX - Math.cos(angle - 0.45) * arrowSize,
+        guideEndY - Math.sin(angle - 0.45) * arrowSize
       );
       ctx.lineTo(
-        player.pos.x - Math.cos(angle + 0.3) * 15,
-        player.pos.y - Math.sin(angle + 0.3) * 15
+        guideEndX - Math.cos(angle + 0.45) * arrowSize,
+        guideEndY - Math.sin(angle + 0.45) * arrowSize
       );
       ctx.closePath();
       ctx.fill();
@@ -271,6 +282,7 @@ export default function TejoCanvas({ gameState, onMouseDown, onMouseMove, onMous
   const handlePointerDown = (e: React.PointerEvent) => {
     const rect = canvasRef.current?.getBoundingClientRect();
     if (!rect) return;
+    canvasRef.current?.setPointerCapture(e.pointerId);
     const x = (e.clientX - rect.left) / scale;
     const y = (e.clientY - rect.top) / scale;
     onMouseDown(x, y);
@@ -284,8 +296,17 @@ export default function TejoCanvas({ gameState, onMouseDown, onMouseMove, onMous
     onMouseMove(x, y);
   };
 
-  const handlePointerUp = () => {
+  const handlePointerUp = (e: React.PointerEvent) => {
+    if (canvasRef.current?.hasPointerCapture(e.pointerId)) {
+      canvasRef.current.releasePointerCapture(e.pointerId);
+    }
     onMouseUp();
+  };
+
+  const handlePointerCancel = (e: React.PointerEvent) => {
+    if (canvasRef.current?.hasPointerCapture(e.pointerId)) {
+      canvasRef.current.releasePointerCapture(e.pointerId);
+    }
   };
 
   return (
@@ -296,14 +317,14 @@ export default function TejoCanvas({ gameState, onMouseDown, onMouseMove, onMous
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
-      onPointerLeave={handlePointerUp}
+      onPointerCancel={handlePointerCancel}
       style={{
         width: FIELD_WIDTH * scale,
         height: FIELD_HEIGHT * scale,
         touchAction: 'none',
         cursor: gameState.phase === 'aiming' ? 'crosshair' : 'default',
       }}
-      className="rounded-lg shadow-2xl border-4 border-amber-900"
+      className="rounded-lg shadow-2xl border-4 border-green-950"
     />
   );
 }

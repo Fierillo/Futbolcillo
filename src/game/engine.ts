@@ -1,18 +1,17 @@
 import {
   GameState,
   Player,
-  Mechero,
   Vec2,
   FIELD_WIDTH,
   FIELD_HEIGHT,
   PLAYER_RADIUS,
   BALL_RADIUS,
-  MECHERO_RADIUS,
   GOAL_WIDTH,
   GOAL_HEIGHT,
   FRICTION,
   STOP_THRESHOLD,
   MAX_SHOOT_POWER,
+  MOVEMENT_SCALE,
   WIN_SCORE,
 } from './types';
 
@@ -79,12 +78,6 @@ export function createInitialState(): GameState {
     });
   });
 
-  const mecheros: Mechero[] = [
-    { pos: vec2(FIELD_WIDTH / 2, FIELD_HEIGHT / 2 - 80), radius: MECHERO_RADIUS, exploded: false, explodeTimer: 0, flashTimer: 0 },
-    { pos: vec2(FIELD_WIDTH / 2, FIELD_HEIGHT / 2), radius: MECHERO_RADIUS, exploded: false, explodeTimer: 0, flashTimer: 0 },
-    { pos: vec2(FIELD_WIDTH / 2, FIELD_HEIGHT / 2 + 80), radius: MECHERO_RADIUS, exploded: false, explodeTimer: 0, flashTimer: 0 },
-  ];
-
   return {
     players,
     ball: {
@@ -96,7 +89,6 @@ export function createInitialState(): GameState {
       strokeColor: '#f59e0b',
       trail: [],
     },
-    mecheros,
     goals: [
       { x: 0, y: FIELD_HEIGHT / 2 - GOAL_HEIGHT / 2, width: GOAL_WIDTH, height: GOAL_HEIGHT, team: 'home' },
       { x: FIELD_WIDTH - GOAL_WIDTH, y: FIELD_HEIGHT / 2 - GOAL_HEIGHT / 2, width: GOAL_WIDTH, height: GOAL_HEIGHT, team: 'away' },
@@ -165,28 +157,6 @@ function spawnParticles(state: GameState, pos: Vec2, count: number, color: strin
   }
 }
 
-function explodeMechero(state: GameState, mechero: Mechero) {
-  if (mechero.exploded) return;
-  mechero.exploded = true;
-  mechero.explodeTimer = 60;
-  state.cameraShake = 8;
-  spawnParticles(state, mechero.pos, 30, '#ef4444', 6, 4);
-  spawnParticles(state, mechero.pos, 15, '#fbbf24', 4, 3);
-  spawnParticles(state, mechero.pos, 10, '#ffffff', 3, 2);
-
-  // Push nearby entities
-  const entities = [...state.players, state.ball];
-  for (const ent of entities) {
-    const d = dist(ent.pos, mechero.pos);
-    if (d < 120 && d > 0) {
-      const dir = normalize(vec2(ent.pos.x - mechero.pos.x, ent.pos.y - mechero.pos.y));
-      const force = (120 - d) / 120 * 12;
-      ent.vel.x += dir.x * force;
-      ent.vel.y += dir.y * force;
-    }
-  }
-}
-
 function checkGoal(state: GameState): 'home' | 'away' | null {
   const ball = state.ball;
   for (const goal of state.goals) {
@@ -235,18 +205,11 @@ function resetPositions(state: GameState, scoringTeam: 'home' | 'away') {
     }
   }
 
-  // Reset mecheros
-  for (const m of state.mecheros) {
-    m.exploded = false;
-    m.explodeTimer = 0;
-    m.flashTimer = 0;
-  }
-
   state.phase = 'aiming';
   state.selectedPlayer = null;
   state.dragStart = null;
   state.dragCurrent = null;
-  state.turn = scoringTeam;
+  state.turn = scoringTeam === 'home' ? 'away' : 'home';
 }
 
 export function updateGame(state: GameState, _dt: number): GameState {
@@ -270,33 +233,12 @@ export function updateGame(state: GameState, _dt: number): GameState {
     if (state.cameraShake < 0.5) state.cameraShake = 0;
   }
 
-  // Update mecheros
-  for (const m of state.mecheros) {
-    if (m.exploded) {
-      m.explodeTimer--;
-      if (m.explodeTimer <= 0) {
-        m.exploded = false;
-        m.explodeTimer = 0;
-      }
-    } else {
-      // Check collision with ball or players
-      if (dist(state.ball.pos, m.pos) < state.ball.radius + m.radius) {
-        explodeMechero(state, m);
-      }
-      for (const p of state.players) {
-        if (dist(p.pos, m.pos) < p.radius + m.radius) {
-          explodeMechero(state, m);
-        }
-      }
-    }
-  }
-
   // Update players
   let allStopped = true;
   for (const p of state.players) {
     if (p.cooldown > 0) p.cooldown--;
-    p.pos.x += p.vel.x;
-    p.pos.y += p.vel.y;
+    p.pos.x += p.vel.x * MOVEMENT_SCALE;
+    p.pos.y += p.vel.y * MOVEMENT_SCALE;
     p.vel.x *= FRICTION;
     p.vel.y *= FRICTION;
 
@@ -325,8 +267,8 @@ export function updateGame(state: GameState, _dt: number): GameState {
 
   // Update ball
   const ball = state.ball;
-  ball.pos.x += ball.vel.x;
-  ball.pos.y += ball.vel.y;
+  ball.pos.x += ball.vel.x * MOVEMENT_SCALE;
+  ball.pos.y += ball.vel.y * MOVEMENT_SCALE;
   ball.vel.x *= FRICTION;
   ball.vel.y *= FRICTION;
 
