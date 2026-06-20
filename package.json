@@ -1,20 +1,29 @@
 {
-  "name": "futbolcillo",
-  "version": "1.0.0",
-  "description": "Minimalist turn-based 2D football game",
-  "license": "ISC",
+  "name": "react-vite-tailwind",
+  "private": true,
+  "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "npx vite",
-    "build": "npx vite build",
-    "test": "vitest run",
-    "test:watch": "vitest"
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
   },
   "dependencies": {
-    "phaser": "^3.87.0"
+    "clsx": "2.1.1",
+    "lucide-react": "^1.17.0",
+    "react": "19.2.6",
+    "react-dom": "19.2.6",
+    "tailwind-merge": "3.4.0"
   },
   "devDependencies": {
-    "vite": "^6.3.5",
-    "vitest": "^4.1.8"
+    "@tailwindcss/vite": "4.1.17",
+    "@types/node": "22.19.17",
+    "@types/react": "19.2.7",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "5.1.1",
+    "tailwindcss": "4.1.17",
+    "typescript": "5.9.3",
+    "vite": "7.3.2",
+    "vite-plugin-singlefile": "2.3.0"
   }
 }

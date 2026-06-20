@@ -1,0 +1,480 @@
+import {
+  GameState,
+  Player,
+  Mechero,
+  Vec2,
+  FIELD_WIDTH,
+  FIELD_HEIGHT,
+  PLAYER_RADIUS,
+  BALL_RADIUS,
+  MECHERO_RADIUS,
+  GOAL_WIDTH,
+  GOAL_HEIGHT,
+  FRICTION,
+  STOP_THRESHOLD,
+  MAX_SHOOT_POWER,
+  WIN_SCORE,
+} from './types';
+
+function vec2(x = 0, y = 0): Vec2 {
+  return { x, y };
+}
+
+function dist(a: Vec2, b: Vec2): number {
+  return Math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2);
+}
+
+function normalize(v: Vec2): Vec2 {
+  const len = Math.sqrt(v.x * v.x + v.y * v.y);
+  if (len === 0) return vec2(0, 0);
+  return vec2(v.x / len, v.y / len);
+}
+
+function clamp(val: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, val));
+}
+
+export function createInitialState(): GameState {
+  const players: Player[] = [];
+
+  // Home team (left side, blue)
+  const homePositions = [
+    { x: 180, y: 220 },
+    { x: 180, y: 380 },
+    { x: 320, y: 300 },
+  ];
+  homePositions.forEach((pos, i) => {
+    players.push({
+      pos: vec2(pos.x, pos.y),
+      vel: vec2(0, 0),
+      radius: PLAYER_RADIUS,
+      mass: 3,
+      color: '#1e40af',
+      strokeColor: '#60a5fa',
+      team: 'home',
+      number: i + 1,
+      isSelected: false,
+      cooldown: 0,
+    });
+  });
+
+  // Away team (right side, red)
+  const awayPositions = [
+    { x: 820, y: 220 },
+    { x: 820, y: 380 },
+    { x: 680, y: 300 },
+  ];
+  awayPositions.forEach((pos, i) => {
+    players.push({
+      pos: vec2(pos.x, pos.y),
+      vel: vec2(0, 0),
+      radius: PLAYER_RADIUS,
+      mass: 3,
+      color: '#b91c1c',
+      strokeColor: '#f87171',
+      team: 'away',
+      number: i + 1,
+      isSelected: false,
+      cooldown: 0,
+    });
+  });
+
+  const mecheros: Mechero[] = [
+    { pos: vec2(FIELD_WIDTH / 2, FIELD_HEIGHT / 2 - 80), radius: MECHERO_RADIUS, exploded: false, explodeTimer: 0, flashTimer: 0 },
+    { pos: vec2(FIELD_WIDTH / 2, FIELD_HEIGHT / 2), radius: MECHERO_RADIUS, exploded: false, explodeTimer: 0, flashTimer: 0 },
+    { pos: vec2(FIELD_WIDTH / 2, FIELD_HEIGHT / 2 + 80), radius: MECHERO_RADIUS, exploded: false, explodeTimer: 0, flashTimer: 0 },
+  ];
+
+  return {
+    players,
+    ball: {
+      pos: vec2(FIELD_WIDTH / 2, FIELD_HEIGHT / 2),
+      vel: vec2(0, 0),
+      radius: BALL_RADIUS,
+      mass: 1,
+      color: '#fbbf24',
+      strokeColor: '#f59e0b',
+      trail: [],
+    },
+    mecheros,
+    goals: [
+      { x: 0, y: FIELD_HEIGHT / 2 - GOAL_HEIGHT / 2, width: GOAL_WIDTH, height: GOAL_HEIGHT, team: 'home' },
+      { x: FIELD_WIDTH - GOAL_WIDTH, y: FIELD_HEIGHT / 2 - GOAL_HEIGHT / 2, width: GOAL_WIDTH, height: GOAL_HEIGHT, team: 'away' },
+    ],
+    score: { home: 0, away: 0 },
+    turn: 'home',
+    phase: 'aiming',
+    selectedPlayer: null,
+    dragStart: null,
+    dragCurrent: null,
+    winner: null,
+    message: '',
+    messageTimer: 0,
+    particles: [],
+    cameraShake: 0,
+  };
+}
+
+function resolveCircleCollision(a: { pos: Vec2; vel: Vec2; radius: number; mass: number }, b: { pos: Vec2; vel: Vec2; radius: number; mass: number }) {
+  const dx = b.pos.x - a.pos.x;
+  const dy = b.pos.y - a.pos.y;
+  const distance = Math.sqrt(dx * dx + dy * dy);
+  const minDist = a.radius + b.radius;
+
+  if (distance < minDist && distance > 0) {
+    const overlap = minDist - distance;
+    const nx = dx / distance;
+    const ny = dy / distance;
+
+    // Separate
+    const totalMass = a.mass + b.mass;
+    a.pos.x -= (overlap * b.mass / totalMass) * nx;
+    a.pos.y -= (overlap * b.mass / totalMass) * ny;
+    b.pos.x += (overlap * a.mass / totalMass) * nx;
+    b.pos.y += (overlap * a.mass / totalMass) * ny;
+
+    // Relative velocity
+    const rvx = b.vel.x - a.vel.x;
+    const rvy = b.vel.y - a.vel.y;
+    const velAlongNormal = rvx * nx + rvy * ny;
+
+    if (velAlongNormal > 0) return;
+
+    const restitution = 0.7;
+    const impulse = -(1 + restitution) * velAlongNormal / totalMass;
+
+    a.vel.x -= impulse * b.mass * nx;
+    a.vel.y -= impulse * b.mass * ny;
+    b.vel.x += impulse * a.mass * nx;
+    b.vel.y += impulse * a.mass * ny;
+  }
+}
+
+function spawnParticles(state: GameState, pos: Vec2, count: number, color: string, speed: number, size: number) {
+  for (let i = 0; i < count; i++) {
+    const angle = Math.random() * Math.PI * 2;
+    const spd = Math.random() * speed + 1;
+    state.particles.push({
+      pos: vec2(pos.x, pos.y),
+      vel: vec2(Math.cos(angle) * spd, Math.sin(angle) * spd),
+      life: 1,
+      maxLife: 1,
+      color,
+      size: Math.random() * size + 1,
+    });
+  }
+}
+
+function explodeMechero(state: GameState, mechero: Mechero) {
+  if (mechero.exploded) return;
+  mechero.exploded = true;
+  mechero.explodeTimer = 60;
+  state.cameraShake = 8;
+  spawnParticles(state, mechero.pos, 30, '#ef4444', 6, 4);
+  spawnParticles(state, mechero.pos, 15, '#fbbf24', 4, 3);
+  spawnParticles(state, mechero.pos, 10, '#ffffff', 3, 2);
+
+  // Push nearby entities
+  const entities = [...state.players, state.ball];
+  for (const ent of entities) {
+    const d = dist(ent.pos, mechero.pos);
+    if (d < 120 && d > 0) {
+      const dir = normalize(vec2(ent.pos.x - mechero.pos.x, ent.pos.y - mechero.pos.y));
+      const force = (120 - d) / 120 * 12;
+      ent.vel.x += dir.x * force;
+      ent.vel.y += dir.y * force;
+    }
+  }
+}
+
+function checkGoal(state: GameState): 'home' | 'away' | null {
+  const ball = state.ball;
+  for (const goal of state.goals) {
+    const inGoalY = ball.pos.y > goal.y && ball.pos.y < goal.y + goal.height;
+    if (!inGoalY) continue;
+    // Home goal is on the left, away goal on the right
+    if (goal.team === 'home') {
+      if (ball.pos.x < goal.x + goal.width) {
+        return 'away';
+      }
+    } else {
+      if (ball.pos.x > goal.x) {
+        return 'home';
+      }
+    }
+  }
+  return null;
+}
+
+function resetPositions(state: GameState, scoringTeam: 'home' | 'away') {
+  state.ball.pos = vec2(FIELD_WIDTH / 2, FIELD_HEIGHT / 2);
+  state.ball.vel = vec2(0, 0);
+  state.ball.trail = [];
+
+  const homePositions = [
+    { x: 180, y: 220 },
+    { x: 180, y: 380 },
+    { x: 320, y: 300 },
+  ];
+  const awayPositions = [
+    { x: 820, y: 220 },
+    { x: 820, y: 380 },
+    { x: 680, y: 300 },
+  ];
+
+  let hi = 0, ai = 0;
+  for (const p of state.players) {
+    p.vel = vec2(0, 0);
+    p.cooldown = 0;
+    if (p.team === 'home') {
+      p.pos = vec2(homePositions[hi].x, homePositions[hi].y);
+      hi++;
+    } else {
+      p.pos = vec2(awayPositions[ai].x, awayPositions[ai].y);
+      ai++;
+    }
+  }
+
+  // Reset mecheros
+  for (const m of state.mecheros) {
+    m.exploded = false;
+    m.explodeTimer = 0;
+    m.flashTimer = 0;
+  }
+
+  state.phase = 'aiming';
+  state.selectedPlayer = null;
+  state.dragStart = null;
+  state.dragCurrent = null;
+  state.turn = scoringTeam;
+}
+
+export function updateGame(state: GameState, _dt: number): GameState {
+  if (state.winner) return state;
+
+  // Update particles
+  for (let i = state.particles.length - 1; i >= 0; i--) {
+    const p = state.particles[i];
+    p.pos.x += p.vel.x;
+    p.pos.y += p.vel.y;
+    p.vel.y += 0.05;
+    p.life -= 0.015;
+    if (p.life <= 0) {
+      state.particles.splice(i, 1);
+    }
+  }
+
+  // Camera shake decay
+  if (state.cameraShake > 0) {
+    state.cameraShake *= 0.9;
+    if (state.cameraShake < 0.5) state.cameraShake = 0;
+  }
+
+  // Update mecheros
+  for (const m of state.mecheros) {
+    if (m.exploded) {
+      m.explodeTimer--;
+      if (m.explodeTimer <= 0) {
+        m.exploded = false;
+        m.explodeTimer = 0;
+      }
+    } else {
+      // Check collision with ball or players
+      if (dist(state.ball.pos, m.pos) < state.ball.radius + m.radius) {
+        explodeMechero(state, m);
+      }
+      for (const p of state.players) {
+        if (dist(p.pos, m.pos) < p.radius + m.radius) {
+          explodeMechero(state, m);
+        }
+      }
+    }
+  }
+
+  // Update players
+  let allStopped = true;
+  for (const p of state.players) {
+    if (p.cooldown > 0) p.cooldown--;
+    p.pos.x += p.vel.x;
+    p.pos.y += p.vel.y;
+    p.vel.x *= FRICTION;
+    p.vel.y *= FRICTION;
+
+    if (Math.abs(p.vel.x) < STOP_THRESHOLD) p.vel.x = 0;
+    if (Math.abs(p.vel.y) < STOP_THRESHOLD) p.vel.y = 0;
+    if (Math.abs(p.vel.x) > 0.1 || Math.abs(p.vel.y) > 0.1) allStopped = false;
+
+    // Wall collisions
+    if (p.pos.x < p.radius) {
+      p.pos.x = p.radius;
+      p.vel.x = -p.vel.x * 0.6;
+    }
+    if (p.pos.x > FIELD_WIDTH - p.radius) {
+      p.pos.x = FIELD_WIDTH - p.radius;
+      p.vel.x = -p.vel.x * 0.6;
+    }
+    if (p.pos.y < p.radius) {
+      p.pos.y = p.radius;
+      p.vel.y = -p.vel.y * 0.6;
+    }
+    if (p.pos.y > FIELD_HEIGHT - p.radius) {
+      p.pos.y = FIELD_HEIGHT - p.radius;
+      p.vel.y = -p.vel.y * 0.6;
+    }
+  }
+
+  // Update ball
+  const ball = state.ball;
+  ball.pos.x += ball.vel.x;
+  ball.pos.y += ball.vel.y;
+  ball.vel.x *= FRICTION;
+  ball.vel.y *= FRICTION;
+
+  if (Math.abs(ball.vel.x) < STOP_THRESHOLD) ball.vel.x = 0;
+  if (Math.abs(ball.vel.y) < STOP_THRESHOLD) ball.vel.y = 0;
+  if (Math.abs(ball.vel.x) > 0.1 || Math.abs(ball.vel.y) > 0.1) allStopped = false;
+
+  // Ball trail
+  if (Math.abs(ball.vel.x) > 1 || Math.abs(ball.vel.y) > 1) {
+    ball.trail.push(vec2(ball.pos.x, ball.pos.y));
+    if (ball.trail.length > 15) ball.trail.shift();
+  } else if (ball.trail.length > 0) {
+    ball.trail.shift();
+  }
+
+  // Ball wall collisions (with goal detection)
+  const inHomeGoal = ball.pos.y > state.goals[0].y && ball.pos.y < state.goals[0].y + state.goals[0].height;
+  const inAwayGoal = ball.pos.y > state.goals[1].y && ball.pos.y < state.goals[1].y + state.goals[1].height;
+
+  if (ball.pos.x < ball.radius) {
+    if (inHomeGoal) {
+      // Goal!
+    } else {
+      ball.pos.x = ball.radius;
+      ball.vel.x = -ball.vel.x * 0.6;
+    }
+  }
+  if (ball.pos.x > FIELD_WIDTH - ball.radius) {
+    if (inAwayGoal) {
+      // Goal!
+    } else {
+      ball.pos.x = FIELD_WIDTH - ball.radius;
+      ball.vel.x = -ball.vel.x * 0.6;
+    }
+  }
+  if (ball.pos.y < ball.radius) {
+    ball.pos.y = ball.radius;
+    ball.vel.y = -ball.vel.y * 0.6;
+  }
+  if (ball.pos.y > FIELD_HEIGHT - ball.radius) {
+    ball.pos.y = FIELD_HEIGHT - ball.radius;
+    ball.vel.y = -ball.vel.y * 0.6;
+  }
+
+  // Check goal
+  const goalScorer = checkGoal(state);
+  if (goalScorer) {
+    state.score[goalScorer]++;
+    state.message = `¡GOL DE ${goalScorer === 'home' ? 'LOCAL' : 'VISITANTE'}!`;
+    state.messageTimer = 120;
+    state.cameraShake = 12;
+    spawnParticles(state, ball.pos, 50, '#fbbf24', 8, 5);
+    spawnParticles(state, ball.pos, 30, goalScorer === 'home' ? '#60a5fa' : '#f87171', 6, 4);
+
+    if (state.score[goalScorer] >= WIN_SCORE) {
+      state.winner = goalScorer;
+      state.message = `¡${goalScorer === 'home' ? 'LOCAL' : 'VISITANTE'} CAMPEÓN!`;
+    }
+
+    resetPositions(state, goalScorer);
+    return state;
+  }
+
+  // Player-player collisions
+  for (let i = 0; i < state.players.length; i++) {
+    for (let j = i + 1; j < state.players.length; j++) {
+      resolveCircleCollision(state.players[i], state.players[j]);
+    }
+  }
+
+  // Player-ball collisions
+  for (const p of state.players) {
+    resolveCircleCollision(p, state.ball);
+  }
+
+  // Phase management
+  if (state.phase === 'shooting' && allStopped) {
+    state.phase = 'aiming';
+    state.turn = state.turn === 'home' ? 'away' : 'home';
+    state.selectedPlayer = null;
+    state.dragStart = null;
+    state.dragCurrent = null;
+  }
+
+  // Message timer
+  if (state.messageTimer > 0) {
+    state.messageTimer--;
+    if (state.messageTimer <= 0) state.message = '';
+  }
+
+  return state;
+}
+
+export function handleMouseDown(state: GameState, x: number, y: number): GameState {
+  if (state.phase !== 'aiming' || state.winner) return state;
+
+  // Find closest player of current team
+  let closest: Player | null = null;
+  let closestDist = Infinity;
+  for (const p of state.players) {
+    if (p.team !== state.turn) continue;
+    const d = dist(p.pos, vec2(x, y));
+    if (d < p.radius + 15 && d < closestDist) {
+      closest = p;
+      closestDist = d;
+    }
+  }
+
+  if (closest) {
+    state.selectedPlayer = state.players.indexOf(closest);
+    state.dragStart = vec2(closest.pos.x, closest.pos.y);
+    state.dragCurrent = vec2(x, y);
+    closest.isSelected = true;
+  }
+
+  return state;
+}
+
+export function handleMouseMove(state: GameState, x: number, y: number): GameState {
+  if (state.selectedPlayer !== null && state.dragStart) {
+    state.dragCurrent = vec2(x, y);
+  }
+  return state;
+}
+
+export function handleMouseUp(state: GameState): GameState {
+  if (state.selectedPlayer === null || !state.dragStart || !state.dragCurrent) {
+    return state;
+  }
+
+  const player = state.players[state.selectedPlayer];
+  const dx = state.dragStart.x - state.dragCurrent.x;
+  const dy = state.dragStart.y - state.dragCurrent.y;
+  const power = Math.sqrt(dx * dx + dy * dy) * 0.15;
+  const clampedPower = clamp(power, 0, MAX_SHOOT_POWER);
+
+  if (clampedPower > 1) {
+    const dir = normalize(vec2(dx, dy));
+    player.vel.x = dir.x * clampedPower;
+    player.vel.y = dir.y * clampedPower;
+    state.phase = 'shooting';
+    spawnParticles(state, player.pos, 8, '#ffffff', 2, 2);
+  }
+
+  player.isSelected = false;
+  state.selectedPlayer = null;
+  state.dragStart = null;
+  state.dragCurrent = null;
+
+  return state;
+}
