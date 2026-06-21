@@ -12,6 +12,7 @@ export type ChallengeState =
 
 export interface CachedChallenge {
   id: string;
+  accessToken: string;
   ownerPubkey: string;
   mode: ChallengeMode;
   state: ChallengeState;

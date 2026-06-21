@@ -8,6 +8,8 @@ import type { NostrFeatureCard } from './types';
 
 interface Props {
   onClose: () => void;
+  linkedChallengeId?: string;
+  linkedChallengeToken?: string;
 }
 
 const features: NostrFeatureCard[] = [
@@ -27,7 +29,7 @@ const features: NostrFeatureCard[] = [
 
 type ModalStep = 'intro' | 'connect' | 'invite';
 
-export function NostrGatewayModal({ onClose }: Props) {
+export function NostrGatewayModal({ onClose, linkedChallengeId = '', linkedChallengeToken = '' }: Props) {
   const [bunkerToken, setBunkerToken] = useState('');
   const [showQr, setShowQr] = useState(false);
   const [showTechnicalNotes, setShowTechnicalNotes] = useState(false);
@@ -39,7 +41,7 @@ export function NostrGatewayModal({ onClose }: Props) {
     ? `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(bunkerToken.trim())}`
     : '';
 
-  const activeStep = session.status === 'connected' ? 'invite' : step;
+  const activeStep = session.status === 'connected' ? 'invite' : linkedChallengeId ? 'connect' : step;
 
   const stepTitle = activeStep === 'intro' ? 'Modo Nostr' : activeStep === 'connect' ? 'Conectá tu identidad' : 'Invitá a un rival';
   const stepHint =
@@ -79,6 +81,15 @@ export function NostrGatewayModal({ onClose }: Props) {
             </button>
           </div>
         </div>
+
+        {linkedChallengeId && linkedChallengeToken && (
+          <div className="mb-4 rounded-2xl border border-sky-800/60 bg-sky-950/30 px-4 py-3 text-sm text-sky-100">
+            <p className="font-semibold">Llegaste desde un desafío</p>
+            <p className="mt-1 text-sky-100/80">
+              Conectate con Nostr para seguir con este reto. ID corto: <span className="font-mono">{linkedChallengeId.slice(0, 8)}</span>
+            </p>
+          </div>
+        )}
 
         {activeStep === 'intro' && (
           <>

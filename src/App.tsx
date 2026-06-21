@@ -19,6 +19,8 @@ export default function App() {
   const [gameState, setGameState] = useState<GameState>(createInitialState);
   const [showHelp, setShowHelp] = useState(true);
   const [showNostrGateway, setShowNostrGateway] = useState(false);
+  const [linkedChallengeId, setLinkedChallengeId] = useState('');
+  const [linkedChallengeToken, setLinkedChallengeToken] = useState('');
   const [muted, setMuted] = useState(false);
   const [scale, setScale] = useState(1);
   const gameStateRef = useRef<GameState>(gameState);
@@ -38,6 +40,17 @@ export default function App() {
       });
     }
   }, [session.status, session.profile, setSyncState]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const challengeId = params.get('challenge') || '';
+    const challengeToken = params.get('token') || '';
+    if (!challengeId || !challengeToken) return;
+
+    setLinkedChallengeId(challengeId);
+    setLinkedChallengeToken(challengeToken);
+    setShowNostrGateway(true);
+  }, []);
 
   useEffect(() => {
     gameStateRef.current = gameState;
@@ -263,7 +276,13 @@ export default function App() {
         />
       </div>
 
-      {showNostrGateway && <NostrGatewayModal onClose={() => setShowNostrGateway(false)} />}
+      {showNostrGateway && (
+        <NostrGatewayModal
+          linkedChallengeId={linkedChallengeId}
+          linkedChallengeToken={linkedChallengeToken}
+          onClose={() => setShowNostrGateway(false)}
+        />
+      )}
 
       {session.status === 'connected' && (
         <div className="w-full max-w-5xl px-4 pb-2">

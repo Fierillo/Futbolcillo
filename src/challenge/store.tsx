@@ -40,6 +40,29 @@ const defaultDraft: ChallengeDraft = {
   mode: 'friendly',
 };
 
+const challengeSeedWords = {
+  first: ['gol', 'pase', 'gamba', 'potrero', 'barrio', 'cancha', 'bocha', 'arco', 'grito', 'zurda'],
+  second: ['verde', 'firme', 'picante', 'sereno', 'bravo', 'lento', 'vivo', 'sutil', 'corto', 'claro'],
+  third: ['mate', 'tribuna', 'pique', 'caño', 'sueño', 'toque', 'rebote', 'clásico', 'cábala', 'enganche'],
+  fourth: ['sur', 'norte', 'delta', 'centro', 'playa', 'luna', 'sol', 'río', 'campo', 'banda'],
+};
+
+function generateChallengeId() {
+  const bytes = crypto.getRandomValues(new Uint32Array(4));
+
+  return [
+    challengeSeedWords.first[bytes[0] % challengeSeedWords.first.length],
+    challengeSeedWords.second[bytes[1] % challengeSeedWords.second.length],
+    challengeSeedWords.third[bytes[2] % challengeSeedWords.third.length],
+    challengeSeedWords.fourth[bytes[3] % challengeSeedWords.fourth.length],
+  ].join('-');
+}
+
+function generateChallengeAccessToken() {
+  const bytes = crypto.getRandomValues(new Uint8Array(18));
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
 function normalizePubkey(input: string, profiles: CachedProfile[]) {
   const value = input.trim();
   if (!value) return '';
@@ -80,7 +103,7 @@ async function sendChallengeDirectMessage(
 ) {
   const recipient = ndk.getUser({ pubkey: challenge.rivalPubkey });
   const siteUrl = typeof window !== 'undefined' ? window.location.origin : 'https://futbolcillo.app';
-  const challengeUrl = `${siteUrl}?challenge=${challenge.id}`;
+  const challengeUrl = `${siteUrl}?challenge=${challenge.id}&token=${challenge.accessToken}`;
   const message =
     challenge.mode === 'wager'
       ? [
@@ -99,6 +122,7 @@ async function sendChallengeDirectMessage(
     type: 'futbolcillo_challenge',
     version: 1,
     challengeId: challenge.id,
+    accessToken: challenge.accessToken,
     mode: challenge.mode,
     amountSats: challenge.amountSats,
     expirationAt: challenge.expirationAt,
@@ -258,7 +282,8 @@ export function ChallengeProvider({ children }: { children: ReactNode }) {
       const now = Date.now();
       const selectedProfile = [...followingRivals, ...recentRivals].find((profile) => profile.pubkey === rivalPubkey);
       const challenge: CachedChallenge = {
-        id: crypto.randomUUID(),
+        id: generateChallengeId(),
+        accessToken: generateChallengeAccessToken(),
         ownerPubkey: session.pubkey,
         mode: draft.mode,
         state: 'sent',
