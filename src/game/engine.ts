@@ -15,6 +15,8 @@ import {
   WIN_SCORE,
 } from './types';
 
+const DEBUG_FOULS = true;
+
 function vec2(x = 0, y = 0): Vec2 {
   return { x, y };
 }
@@ -31,6 +33,15 @@ function normalize(v: Vec2): Vec2 {
 
 function clamp(val: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, val));
+}
+
+function logFoulDebug(message: string, data?: Record<string, unknown>) {
+  if (!DEBUG_FOULS) return;
+  console.log(`[foul-debug] ${message}`, data ?? {});
+}
+
+function areCirclesTouching(a: { pos: Vec2; radius: number }, b: { pos: Vec2; radius: number }, tolerance = 0.5) {
+  return dist(a.pos, b.pos) <= a.radius + b.radius + tolerance;
 }
 
 export function createInitialState(): GameState {
@@ -95,8 +106,13 @@ export function createInitialState(): GameState {
     ],
     score: { home: 0, away: 0 },
     turn: 'home',
+    bonusTurnTeam: null,
+    pendingBonusTurns: 0,
     phase: 'aiming',
     selectedPlayer: null,
+    activeShotPlayer: null,
+    activeShotTouchedBall: false,
+    activeShotCommittedFoul: false,
     dragStart: null,
     dragCurrent: null,
     winner: null,
@@ -207,8 +223,13 @@ function resetPositions(state: GameState, scoringTeam: 'home' | 'away') {
 
   state.phase = 'aiming';
   state.selectedPlayer = null;
+  state.activeShotPlayer = null;
+  state.activeShotTouchedBall = false;
+  state.activeShotCommittedFoul = false;
   state.dragStart = null;
   state.dragCurrent = null;
+  state.bonusTurnTeam = null;
+  state.pendingBonusTurns = 0;
   state.turn = scoringTeam === 'home' ? 'away' : 'home';
 }
 
@@ -237,6 +258,7 @@ export function updateGame(state: GameState, _dt: number): GameState {
   let allStopped = true;
   for (const p of state.players) {
     if (p.cooldown > 0) p.cooldown--;
+
     p.pos.x += p.vel.x * MOVEMENT_SCALE;
     p.pos.y += p.vel.y * MOVEMENT_SCALE;
     p.vel.x *= FRICTION;
@@ -287,9 +309,10 @@ export function updateGame(state: GameState, _dt: number): GameState {
   // Ball wall collisions (with goal detection)
   const inHomeGoal = ball.pos.y > state.goals[0].y && ball.pos.y < state.goals[0].y + state.goals[0].height;
   const inAwayGoal = ball.pos.y > state.goals[1].y && ball.pos.y < state.goals[1].y + state.goals[1].height;
+  const goalsBlockedByFoul = state.activeShotCommittedFoul;
 
   if (ball.pos.x < ball.radius) {
-    if (inHomeGoal) {
+    if (inHomeGoal && !goalsBlockedByFoul) {
       // Goal!
     } else {
       ball.pos.x = ball.radius;
@@ -297,7 +320,7 @@ export function updateGame(state: GameState, _dt: number): GameState {
     }
   }
   if (ball.pos.x > FIELD_WIDTH - ball.radius) {
-    if (inAwayGoal) {
+    if (inAwayGoal && !goalsBlockedByFoul) {
       // Goal!
     } else {
       ball.pos.x = FIELD_WIDTH - ball.radius;
@@ -314,7 +337,7 @@ export function updateGame(state: GameState, _dt: number): GameState {
   }
 
   // Check goal
-  const goalScorer = checkGoal(state);
+  const goalScorer = goalsBlockedByFoul ? null : checkGoal(state);
   if (goalScorer) {
     state.score[goalScorer]++;
     state.message = `¡GOL DE ${goalScorer === 'home' ? 'LOCAL' : 'RIVAL'}!`;
@@ -332,23 +355,98 @@ export function updateGame(state: GameState, _dt: number): GameState {
     return state;
   }
 
+  // Player-ball collisions
+  for (let i = 0; i < state.players.length; i++) {
+    const player = state.players[i];
+
+    if (
+      state.phase === 'shooting' &&
+      state.activeShotPlayer === i &&
+      !state.activeShotTouchedBall &&
+      areCirclesTouching(player, state.ball)
+    ) {
+      state.activeShotTouchedBall = true;
+      logFoulDebug('ball touched on collision resolution', {
+        shooter: player.number,
+        team: player.team,
+        distance: Number(dist(player.pos, state.ball.pos).toFixed(2)),
+        threshold: Number((player.radius + state.ball.radius).toFixed(2)),
+      });
+    }
+
+    resolveCircleCollision(player, state.ball);
+  }
+
   // Player-player collisions
   for (let i = 0; i < state.players.length; i++) {
     for (let j = i + 1; j < state.players.length; j++) {
+      if (
+        state.phase === 'shooting' &&
+        state.activeShotPlayer !== null &&
+        !state.activeShotTouchedBall &&
+        !state.activeShotCommittedFoul &&
+        (state.activeShotPlayer === i || state.activeShotPlayer === j)
+      ) {
+        const first = state.players[i];
+        const second = state.players[j];
+        const shooter = state.activeShotPlayer === i ? first : state.activeShotPlayer === j ? second : null;
+        const other = shooter === first ? second : first;
+
+        if (shooter) {
+          logFoulDebug('checking player collision', {
+            shooter: shooter.number,
+            shooterTeam: shooter.team,
+            rival: other.number,
+            rivalTeam: other.team,
+            distance: Number(dist(shooter.pos, other.pos).toFixed(2)),
+            threshold: Number((shooter.radius + other.radius).toFixed(2)),
+            touchedBall: state.activeShotTouchedBall,
+            foul: state.activeShotCommittedFoul,
+          });
+        }
+
+        if (shooter && shooter.team !== other.team && areCirclesTouching(shooter, other)) {
+          state.activeShotCommittedFoul = true;
+          state.bonusTurnTeam = other.team;
+          state.pendingBonusTurns = 1;
+          state.message = '¡Falta! El rival gana dos jugadas.';
+          state.messageTimer = 120;
+          state.cameraShake = 6;
+          spawnParticles(state, shooter.pos, 18, '#f87171', 3, 3);
+          logFoulDebug('foul detected on collision resolution', {
+            shooter: shooter.number,
+            shooterTeam: shooter.team,
+            rival: other.number,
+            rivalTeam: other.team,
+            distance: Number(dist(shooter.pos, other.pos).toFixed(2)),
+            threshold: Number((shooter.radius + other.radius).toFixed(2)),
+          });
+        }
+      }
+
       resolveCircleCollision(state.players[i], state.players[j]);
     }
-  }
-
-  // Player-ball collisions
-  for (const p of state.players) {
-    resolveCircleCollision(p, state.ball);
   }
 
   // Phase management
   if (state.phase === 'shooting' && allStopped) {
     state.phase = 'aiming';
-    state.turn = state.turn === 'home' ? 'away' : 'home';
+    const nextTurn = state.turn === 'home' ? 'away' : 'home';
+
+    if (state.pendingBonusTurns > 0 && state.bonusTurnTeam === state.turn) {
+      state.pendingBonusTurns--;
+      if (state.pendingBonusTurns <= 0) {
+        state.pendingBonusTurns = 0;
+        state.bonusTurnTeam = null;
+      }
+    } else {
+      state.turn = nextTurn;
+    }
+
     state.selectedPlayer = null;
+    state.activeShotPlayer = null;
+    state.activeShotTouchedBall = false;
+    state.activeShotCommittedFoul = false;
     state.dragStart = null;
     state.dragCurrent = null;
   }
@@ -410,6 +508,16 @@ export function handleMouseUp(state: GameState): GameState {
     player.vel.x = dir.x * clampedPower;
     player.vel.y = dir.y * clampedPower;
     state.phase = 'shooting';
+    state.activeShotPlayer = state.players.indexOf(player);
+    state.activeShotTouchedBall = false;
+    state.activeShotCommittedFoul = false;
+    logFoulDebug('shot started', {
+      shooter: player.number,
+      team: player.team,
+      power: Number(clampedPower.toFixed(2)),
+      dir: { x: Number(dir.x.toFixed(3)), y: Number(dir.y.toFixed(3)) },
+      start: { x: Number(player.pos.x.toFixed(2)), y: Number(player.pos.y.toFixed(2)) },
+    });
     spawnParticles(state, player.pos, 8, '#ffffff', 2, 2);
   }
 

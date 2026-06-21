@@ -358,6 +358,10 @@ export default function App() {
                 <div className="w-8 h-8 rounded-full bg-amber-600 flex items-center justify-center shrink-0 text-xs font-bold">⚽</div>
                 <p>Meté la pelota en el arco rival. El primero en 3 goles gana.</p>
               </div>
+              <div className="flex gap-3">
+                <div className="w-8 h-8 rounded-full bg-red-600 flex items-center justify-center shrink-0 text-xs font-bold">!</div>
+                <p>Si tocás un disco rival antes que la pelota, es falta y el rival gana dos jugadas.</p>
+              </div>
             </div>
 
             <button

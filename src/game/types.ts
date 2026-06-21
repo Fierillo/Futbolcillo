@@ -37,8 +37,13 @@ export interface GameState {
   goals: Goal[];
   score: { home: number; away: number };
   turn: 'home' | 'away';
+  bonusTurnTeam: 'home' | 'away' | null;
+  pendingBonusTurns: number;
   phase: 'aiming' | 'shooting' | 'resetting';
   selectedPlayer: number | null;
+  activeShotPlayer: number | null;
+  activeShotTouchedBall: boolean;
+  activeShotCommittedFoul: boolean;
   dragStart: Vec2 | null;
   dragCurrent: Vec2 | null;
   winner: 'home' | 'away' | null;
