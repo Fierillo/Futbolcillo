@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ArrowLeft, ChevronDown, LoaderCircle, PlugZap, QrCode, RefreshCcw, Shield, Swords, Wallet, Wifi, X, Zap } from 'lucide-react';
+import { useChallengeStore } from '../challenge/store';
 import { ChallengeComposer } from '../challenge/ChallengeComposer';
 import { ChallengeHistoryPanel } from '../challenge/ChallengeHistoryPanel';
 import { getRelayList } from './client';
@@ -35,6 +36,7 @@ export function NostrGatewayModal({ onClose, linkedChallengeId = '', linkedChall
   const [showTechnicalNotes, setShowTechnicalNotes] = useState(false);
   const [step, setStep] = useState<ModalStep>('intro');
   const { session, connectNip07, connectBunker, disconnect, refreshProfile } = useNostrSession();
+  const { linkedChallenge, loadLinkedChallenge } = useChallengeStore();
   const relays = getRelayList();
   const isBusy = session.status === 'connecting';
   const bunkerQrUrl = bunkerToken.trim()
@@ -50,6 +52,11 @@ export function NostrGatewayModal({ onClose, linkedChallengeId = '', linkedChall
       : activeStep === 'connect'
         ? 'Entrá con extensión o con bunker.'
         : 'Ya entraste. Ahora toca retar a alguien.';
+
+  useEffect(() => {
+    if (session.status !== 'connected' || !linkedChallengeId || !linkedChallengeToken) return;
+    void loadLinkedChallenge(linkedChallengeId, linkedChallengeToken);
+  }, [session.status, linkedChallengeId, linkedChallengeToken, loadLinkedChallenge]);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 px-4">
@@ -88,6 +95,13 @@ export function NostrGatewayModal({ onClose, linkedChallengeId = '', linkedChall
             <p className="mt-1 text-sky-100/80">
               Conectate con Nostr para seguir con este reto. ID corto: <span className="font-mono">{linkedChallengeId.slice(0, 8)}</span>
             </p>
+            {linkedChallenge && (
+              <p className="mt-2 text-sky-100/80">
+                {linkedChallenge.mode === 'wager'
+                  ? `Te lo mandó ${linkedChallenge.rivalName} por ${linkedChallenge.amountSats} sats.`
+                  : `Te lo mandó ${linkedChallenge.rivalName} como amistoso.`}
+              </p>
+            )}
           </div>
         )}
 

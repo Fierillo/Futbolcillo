@@ -20,11 +20,13 @@ interface ChallengeContextValue {
   followingRivals: CachedProfile[];
   rivalMatches: CachedProfile[];
   rivalProfiles: Record<string, CachedProfile>;
+  linkedChallenge: CachedChallenge | null;
   draft: ChallengeDraft;
   setDraft: (next: Partial<ChallengeDraft>) => void;
   selectRival: (profile: CachedProfile) => void;
   createChallenge: () => Promise<void>;
   refreshChallenges: () => Promise<void>;
+  loadLinkedChallenge: (challengeId: string, token: string) => Promise<void>;
   challengeError: string;
   clearChallengeError: () => void;
   selectedFilter: ChallengeFilter;
@@ -152,6 +154,7 @@ export function ChallengeProvider({ children }: { children: ReactNode }) {
   const [challenges, setChallenges] = useState<CachedChallenge[]>([]);
   const [recentRivals, setRecentRivals] = useState<CachedProfile[]>([]);
   const [followingRivals, setFollowingRivals] = useState<CachedProfile[]>([]);
+  const [linkedChallenge, setLinkedChallenge] = useState<CachedChallenge | null>(null);
   const [draft, setDraftState] = useState<ChallengeDraft>(defaultDraft);
   const [challengeError, setChallengeError] = useState('');
   const [selectedFilter, setSelectedFilter] = useState<ChallengeFilter>('all');
@@ -198,6 +201,7 @@ export function ChallengeProvider({ children }: { children: ReactNode }) {
     if (!session.pubkey) {
       setChallenges([]);
       setRecentRivals([]);
+      setLinkedChallenge(null);
       return;
     }
 
@@ -225,6 +229,89 @@ export function ChallengeProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     void refreshFollowingRivals();
   }, [refreshFollowingRivals]);
+
+  useEffect(() => {
+    if (!session.pubkey) return;
+
+    const ndk = getNostrClient();
+    let stopped = false;
+
+    const storeIncomingChallenge = async (event: NDKEvent) => {
+      const rawPayload = event.tags.find((tag) => tag[0] === 'challenge')?.[1];
+      if (!rawPayload) return;
+
+      try {
+        const payload = JSON.parse(rawPayload) as {
+          type: string;
+          challengeId: string;
+          accessToken: string;
+          mode: ChallengeMode;
+          amountSats: number;
+          expirationAt: number;
+          createdAt: number;
+          from: string;
+          rivalName?: string;
+        };
+
+        if (payload.type !== 'futbolcillo_challenge') return;
+
+        const senderPubkey = event.pubkey;
+        const existingProfile = await cacheDb.profiles.get(senderPubkey);
+        if (!existingProfile) {
+          await cacheDb.profiles.put({
+            pubkey: senderPubkey,
+            avatarUrl: `https://api.dicebear.com/9.x/shapes/svg?seed=${senderPubkey}`,
+            displayName: payload.rivalName || `Rival ${senderPubkey.slice(0, 8)}`,
+            nip05: '',
+            lud16: '',
+            updatedAt: Date.now(),
+          });
+        }
+
+        await cacheDb.challenges.put({
+          id: payload.challengeId,
+          accessToken: payload.accessToken,
+          ownerPubkey: session.pubkey,
+          mode: payload.mode,
+          state: 'received',
+          rivalPubkey: senderPubkey,
+          rivalName: existingProfile?.displayName || payload.rivalName || `Rival ${senderPubkey.slice(0, 8)}`,
+          amountSats: payload.amountSats,
+          expirationAt: payload.expirationAt,
+          createdAt: payload.createdAt,
+          updatedAt: Date.now(),
+        });
+
+        if (!stopped) {
+          await refreshChallenges();
+        }
+      } catch {
+        // Ignore malformed DMs that are not challenge payloads.
+      }
+    };
+
+    void ndk.connect(1500).then(() => {
+      if (stopped) return;
+
+      ndk.subscribe(
+        {
+          kinds: [NDKKind.EncryptedDirectMessage],
+          '#p': [session.pubkey],
+          limit: 20,
+        },
+        {
+          closeOnEose: false,
+          onEvent: (event) => {
+            void storeIncomingChallenge(event);
+          },
+        }
+      );
+    });
+
+    return () => {
+      stopped = true;
+    };
+  }, [refreshChallenges, session.pubkey]);
 
   const setDraft = useCallback((next: Partial<ChallengeDraft>) => {
     setDraftState((prev) => ({
@@ -320,6 +407,21 @@ export function ChallengeProvider({ children }: { children: ReactNode }) {
 
   const clearChallengeError = useCallback(() => setChallengeError(''), []);
 
+  const loadLinkedChallenge = useCallback(async (challengeId: string, token: string) => {
+    if (!challengeId || !token || !session.pubkey) {
+      setLinkedChallenge(null);
+      return;
+    }
+
+    const challenge = await cacheDb.challenges.get(challengeId);
+    if (!challenge || challenge.accessToken !== token || challenge.ownerPubkey !== session.pubkey) {
+      setLinkedChallenge(null);
+      return;
+    }
+
+    setLinkedChallenge(challenge);
+  }, [session.pubkey]);
+
   const filteredChallenges = useMemo(() => {
     if (selectedFilter === 'all') return challenges;
     if (selectedFilter === 'friendly') return challenges.filter((challenge) => challenge.mode === 'friendly');
@@ -344,17 +446,19 @@ export function ChallengeProvider({ children }: { children: ReactNode }) {
       followingRivals,
       rivalMatches,
       rivalProfiles,
+      linkedChallenge,
       draft,
       setDraft,
       selectRival,
       createChallenge,
       refreshChallenges,
+      loadLinkedChallenge,
       challengeError,
       clearChallengeError,
       selectedFilter,
       setSelectedFilter,
     }),
-    [filteredChallenges, recentRivals, followingRivals, rivalMatches, rivalProfiles, draft, setDraft, selectRival, createChallenge, refreshChallenges, challengeError, clearChallengeError, selectedFilter]
+    [filteredChallenges, recentRivals, followingRivals, rivalMatches, rivalProfiles, linkedChallenge, draft, setDraft, selectRival, createChallenge, refreshChallenges, loadLinkedChallenge, challengeError, clearChallengeError, selectedFilter]
   );
 
   return <ChallengeContext.Provider value={value}>{children}</ChallengeContext.Provider>;
