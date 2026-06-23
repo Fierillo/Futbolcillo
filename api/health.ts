@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { checkDatabaseConnection } from './_lib/neon';
-import { ensureSchema } from './_lib/schema';
+import { checkDatabaseConnection } from './_lib/neon.js';
+import { ensureSchema } from './_lib/schema.js';
 
 export default async function handler(_req: VercelRequest, res: VercelResponse) {
   try {

@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { verifyEvent } from 'nostr-tools';
-import { query } from '../_lib/neon';
-import { getJsonBody, requireMethod } from '../_lib/http';
+import { query } from '../_lib/neon.js';
+import { getJsonBody, requireMethod } from '../_lib/http.js';
 
 type VerifyBody = {
   nonceId: string;

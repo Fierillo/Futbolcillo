@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { query } from '../_lib/neon';
-import { requireMethod } from '../_lib/http';
-import { ensureSchema } from '../_lib/schema';
+import { query } from '../_lib/neon.js';
+import { requireMethod } from '../_lib/http.js';
+import { ensureSchema } from '../_lib/schema.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!requireMethod(req, res, 'GET')) return;

@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { query } from './_lib/neon';
+import { query } from './_lib/neon.js';
 
 export default async function handler(_req: VercelRequest, res: VercelResponse) {
   try {

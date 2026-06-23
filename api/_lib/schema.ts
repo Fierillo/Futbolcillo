@@ -1,4 +1,4 @@
-import { query } from './neon';
+import { query } from './neon.js';
 
 let schemaReadyPromise: Promise<void> | null = null;
 

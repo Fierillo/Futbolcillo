@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { query } from '../_lib/neon';
-import { getJsonBody, requireMethod } from '../_lib/http';
-import { ensureSchema } from '../_lib/schema';
+import { query } from '../_lib/neon.js';
+import { getJsonBody, requireMethod } from '../_lib/http.js';
+import { ensureSchema } from '../_lib/schema.js';
 
 type AcceptChallengeBody = {
   challengeId: string;
