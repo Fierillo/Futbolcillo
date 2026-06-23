@@ -1,5 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { checkDatabaseConnection } from './_lib/neon';
+import { ensureSchema } from './_lib/schema';
 
 export default async function handler(_req: VercelRequest, res: VercelResponse) {
   try {
@@ -13,6 +14,7 @@ export default async function handler(_req: VercelRequest, res: VercelResponse) 
       return;
     }
 
+    await ensureSchema();
     const database = await checkDatabaseConnection();
 
     res.status(200).json({

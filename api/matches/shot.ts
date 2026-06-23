@@ -2,6 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { query } from '../_lib/neon';
 import { getJsonBody, requireMethod } from '../_lib/http';
 import { simulateShot, type MatchState } from '../_lib/physics';
+import { ensureSchema } from '../_lib/schema';
 
 type ShotBody = {
   matchId: string;
@@ -15,6 +16,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!requireMethod(req, res, 'POST')) return;
 
   try {
+    await ensureSchema();
     const body = getJsonBody<ShotBody>(req);
 
     if (!body.matchId || !body.actingPubkey || body.playerIndex === undefined || body.velX === undefined || body.velY === undefined) {

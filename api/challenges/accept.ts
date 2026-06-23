@@ -1,6 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { query } from '../_lib/neon';
 import { getJsonBody, requireMethod } from '../_lib/http';
+import { ensureSchema } from '../_lib/schema';
 
 type AcceptChallengeBody = {
   challengeId: string;
@@ -12,6 +13,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!requireMethod(req, res, 'POST')) return;
 
   try {
+    await ensureSchema();
     const body = getJsonBody<AcceptChallengeBody>(req);
 
     if (!body.challengeId || !body.accessToken || !body.rivalPubkey) {

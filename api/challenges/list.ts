@@ -1,11 +1,13 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { query } from '../_lib/neon';
 import { requireMethod } from '../_lib/http';
+import { ensureSchema } from '../_lib/schema';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!requireMethod(req, res, 'GET')) return;
 
   try {
+    await ensureSchema();
     const pubkey = (req.query.pubkey as string) || '';
 
     if (!pubkey) {
