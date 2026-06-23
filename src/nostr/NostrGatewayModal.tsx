@@ -345,7 +345,7 @@ export function NostrGatewayModal({ onClose, linkedChallengeId = '', linkedChall
         {activeStep === 'invite' && session.status === 'connected' && (
           <div className="mt-4 grid gap-3 lg:grid-cols-[1.1fr,0.9fr]">
             <ChallengeComposer />
-            <ChallengeHistoryPanel />
+            <ChallengeHistoryPanel onAction={onClose} />
           </div>
         )}
 

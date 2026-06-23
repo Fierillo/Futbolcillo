@@ -22,6 +22,8 @@ interface ChallengeContextValue {
   rivalProfiles: Record<string, CachedProfile>;
   linkedChallenge: CachedChallenge | null;
   activeChallenge: CachedChallenge | null;
+  activeChallengeId: string | null;
+  pendingIncomingCount: number;
   draft: ChallengeDraft;
   setDraft: (next: Partial<ChallengeDraft>) => void;
   selectRival: (profile: CachedProfile) => void;
@@ -30,6 +32,8 @@ interface ChallengeContextValue {
   loadLinkedChallenge: (challengeId: string, token: string) => Promise<void>;
   acceptLinkedChallenge: () => Promise<void>;
   rejectLinkedChallenge: () => Promise<void>;
+  acceptIncomingChallenge: (challenge: CachedChallenge) => Promise<void>;
+  enterAcceptedChallenge: (challenge: CachedChallenge) => void;
   challengeError: string;
   clearChallengeError: () => void;
   selectedFilter: ChallengeFilter;
@@ -459,6 +463,30 @@ export function ChallengeProvider({ children }: { children: ReactNode }) {
     await refreshChallenges();
   }, [linkedChallenge, refreshChallenges]);
 
+  const acceptIncomingChallenge = useCallback(async (challenge: CachedChallenge) => {
+    const nextChallenge: CachedChallenge = {
+      ...challenge,
+      state: 'accepted',
+      updatedAt: Date.now(),
+    };
+
+    await cacheDb.challenges.put(nextChallenge);
+    setActiveChallenge(nextChallenge);
+    await refreshChallenges();
+  }, [refreshChallenges]);
+
+  const enterAcceptedChallenge = useCallback((challenge: CachedChallenge) => {
+    setActiveChallenge(challenge);
+  }, []);
+
+  const pendingIncomingCount = useMemo(() => {
+    return challenges.filter(
+      (challenge) => challenge.direction === 'incoming' && challenge.state === 'received'
+    ).length;
+  }, [challenges]);
+
+  const activeChallengeId = activeChallenge?.id ?? null;
+
   const filteredChallenges = useMemo(() => {
     if (selectedFilter === 'all') return challenges;
     if (selectedFilter === 'friendly') return challenges.filter((challenge) => challenge.mode === 'friendly');
@@ -485,6 +513,8 @@ export function ChallengeProvider({ children }: { children: ReactNode }) {
       rivalProfiles,
       linkedChallenge,
       activeChallenge,
+      activeChallengeId,
+      pendingIncomingCount,
       draft,
       setDraft,
       selectRival,
@@ -493,12 +523,14 @@ export function ChallengeProvider({ children }: { children: ReactNode }) {
       loadLinkedChallenge,
       acceptLinkedChallenge,
       rejectLinkedChallenge,
+      acceptIncomingChallenge,
+      enterAcceptedChallenge,
       challengeError,
       clearChallengeError,
       selectedFilter,
       setSelectedFilter,
     }),
-    [filteredChallenges, recentRivals, followingRivals, rivalMatches, rivalProfiles, linkedChallenge, activeChallenge, draft, setDraft, selectRival, createChallenge, refreshChallenges, loadLinkedChallenge, acceptLinkedChallenge, rejectLinkedChallenge, challengeError, clearChallengeError, selectedFilter]
+    [filteredChallenges, recentRivals, followingRivals, rivalMatches, rivalProfiles, linkedChallenge, activeChallenge, activeChallengeId, pendingIncomingCount, draft, setDraft, selectRival, createChallenge, refreshChallenges, loadLinkedChallenge, acceptLinkedChallenge, rejectLinkedChallenge, acceptIncomingChallenge, enterAcceptedChallenge, challengeError, clearChallengeError, selectedFilter]
   );
 
   return <ChallengeContext.Provider value={value}>{children}</ChallengeContext.Provider>;

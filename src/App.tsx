@@ -29,7 +29,7 @@ export default function App() {
   const containerRef = useRef<HTMLDivElement>(null);
   const { setSyncState } = useSyncStatus();
   const { session, refreshProfile } = useNostrSession();
-  const { activeChallenge } = useChallengeStore();
+  const { activeChallenge, pendingIncomingCount } = useChallengeStore();
   const localTeam = activeChallenge?.direction === 'incoming' ? 'away' : activeChallenge?.direction === 'outgoing' ? 'home' : null;
 
   usePhaseOneBoot();
@@ -225,10 +225,15 @@ export default function App() {
           <GlobalSyncStatus onRetry={retrySync} />
           <button
             onClick={() => setShowNostrGateway(true)}
-            className="flex items-center gap-2 rounded-lg bg-emerald-700 px-3 py-2 text-sm font-bold uppercase tracking-wider text-white transition-colors hover:bg-emerald-600"
+            className="relative flex items-center gap-2 rounded-lg bg-emerald-700 px-3 py-2 text-sm font-bold uppercase tracking-wider text-white transition-colors hover:bg-emerald-600"
           >
             <Goal size={16} />
             Quiero Más
+            {pendingIncomingCount > 0 && (
+              <span className="absolute -right-1.5 -top-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-red-500 text-[10px] font-bold text-white">
+                {pendingIncomingCount}
+              </span>
+            )}
           </button>
           <button
             onClick={() => setMuted(!muted)}
