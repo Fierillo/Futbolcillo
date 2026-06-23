@@ -2,6 +2,14 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState, ty
 import type { MatchState } from '../game/physics';
 import type { CachedChallenge } from '../challenge/types';
 
+type ActiveMatch = {
+  id: string;
+  status: string;
+  homePubkey: string;
+  awayPubkey: string;
+  state: MatchState;
+};
+
 interface MatchContextValue {
   activeMatchId: string | null;
   matchState: MatchState | null;
@@ -17,6 +25,7 @@ const MatchContext = createContext<MatchContextValue | null>(null);
 
 export function MatchProvider({ children }: { children: ReactNode }) {
   const [activeMatchId, setActiveMatchId] = useState<string | null>(null);
+  const [activeMatchMeta, setActiveMatchMeta] = useState<ActiveMatch | null>(null);
   const [matchState, setMatchState] = useState<MatchState | null>(null);
   const [matchError, setMatchError] = useState('');
   const [isCreatingMatch, setIsCreatingMatch] = useState(false);
@@ -24,6 +33,7 @@ export function MatchProvider({ children }: { children: ReactNode }) {
 
   const clearMatch = useCallback(() => {
     setActiveMatchId(null);
+    setActiveMatchMeta(null);
     setMatchState(null);
     setMatchError('');
     if (pollRef.current) {
@@ -36,7 +46,7 @@ export function MatchProvider({ children }: { children: ReactNode }) {
     try {
       const res = await fetch(`/api/matches/state?matchId=${matchId}`);
       if (!res.ok) return null;
-      const data = await res.json() as { ok: boolean; match?: { state: MatchState; status: string } };
+      const data = await res.json() as { ok: boolean; match?: ActiveMatch };
       if (data.ok && data.match) {
         return data.match;
       }
@@ -50,6 +60,7 @@ export function MatchProvider({ children }: { children: ReactNode }) {
     if (!activeMatchId) return;
     const match = await fetchMatchState(activeMatchId);
     if (match) {
+      setActiveMatchMeta(match);
       setMatchState(match.state);
       if (match.status === 'finished') {
         if (pollRef.current) {
@@ -66,6 +77,7 @@ export function MatchProvider({ children }: { children: ReactNode }) {
     const poll = async () => {
       const match = await fetchMatchState(activeMatchId);
       if (match) {
+        setActiveMatchMeta(match);
         setMatchState(match.state);
         if (match.status === 'finished' && pollRef.current) {
           clearInterval(pollRef.current);
@@ -110,6 +122,7 @@ export function MatchProvider({ children }: { children: ReactNode }) {
       setActiveMatchId(data.matchId);
       const match = await fetchMatchState(data.matchId);
       if (match) {
+        setActiveMatchMeta(match);
         setMatchState(match.state);
       }
     } catch {
@@ -120,11 +133,9 @@ export function MatchProvider({ children }: { children: ReactNode }) {
   }, [fetchMatchState]);
 
   const submitShot = useCallback(async (playerIndex: number, velX: number, velY: number) => {
-    if (!activeMatchId || !matchState) return;
+    if (!activeMatchId || !matchState || !activeMatchMeta) return;
 
-    const actingPubkey = matchState.turn === 'home'
-      ? (matchState as MatchState & { homePubkey?: string }).homePubkey || ''
-      : (matchState as MatchState & { awayPubkey?: string }).awayPubkey || '';
+    const actingPubkey = matchState.turn === 'home' ? activeMatchMeta.homePubkey : activeMatchMeta.awayPubkey;
 
     try {
       const res = await fetch('/api/matches/shot', {
@@ -152,7 +163,7 @@ export function MatchProvider({ children }: { children: ReactNode }) {
     } catch {
       setMatchError('No se pudo conectar con el servidor.');
     }
-  }, [activeMatchId, matchState]);
+  }, [activeMatchId, matchState, activeMatchMeta]);
 
   const value = {
     activeMatchId,
