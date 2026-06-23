@@ -528,3 +528,32 @@ export function handleMouseUp(state: GameState): GameState {
 
   return state;
 }
+
+export function applyRemoteShot(
+  state: GameState,
+  team: 'home' | 'away',
+  playerNumber: number,
+  velocityX: number,
+  velocityY: number
+): GameState {
+  if (state.phase !== 'aiming' || state.turn !== team || state.winner) {
+    return state;
+  }
+
+  const player = state.players.find((candidate) => candidate.team === team && candidate.number === playerNumber);
+  if (!player) return state;
+
+  player.vel.x = velocityX;
+  player.vel.y = velocityY;
+  player.isSelected = false;
+  state.phase = 'shooting';
+  state.activeShotPlayer = state.players.indexOf(player);
+  state.activeShotTouchedBall = false;
+  state.activeShotCommittedFoul = false;
+  state.selectedPlayer = null;
+  state.dragStart = null;
+  state.dragCurrent = null;
+  spawnParticles(state, player.pos, 8, '#ffffff', 2, 2);
+
+  return state;
+}
