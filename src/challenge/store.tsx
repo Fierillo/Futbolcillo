@@ -21,12 +21,15 @@ interface ChallengeContextValue {
   rivalMatches: CachedProfile[];
   rivalProfiles: Record<string, CachedProfile>;
   linkedChallenge: CachedChallenge | null;
+  activeChallenge: CachedChallenge | null;
   draft: ChallengeDraft;
   setDraft: (next: Partial<ChallengeDraft>) => void;
   selectRival: (profile: CachedProfile) => void;
   createChallenge: () => Promise<void>;
   refreshChallenges: () => Promise<void>;
   loadLinkedChallenge: (challengeId: string, token: string) => Promise<void>;
+  acceptLinkedChallenge: () => Promise<void>;
+  rejectLinkedChallenge: () => Promise<void>;
   challengeError: string;
   clearChallengeError: () => void;
   selectedFilter: ChallengeFilter;
@@ -155,6 +158,7 @@ export function ChallengeProvider({ children }: { children: ReactNode }) {
   const [recentRivals, setRecentRivals] = useState<CachedProfile[]>([]);
   const [followingRivals, setFollowingRivals] = useState<CachedProfile[]>([]);
   const [linkedChallenge, setLinkedChallenge] = useState<CachedChallenge | null>(null);
+  const [activeChallenge, setActiveChallenge] = useState<CachedChallenge | null>(null);
   const [draft, setDraftState] = useState<ChallengeDraft>(defaultDraft);
   const [challengeError, setChallengeError] = useState('');
   const [selectedFilter, setSelectedFilter] = useState<ChallengeFilter>('all');
@@ -202,6 +206,7 @@ export function ChallengeProvider({ children }: { children: ReactNode }) {
       setChallenges([]);
       setRecentRivals([]);
       setLinkedChallenge(null);
+      setActiveChallenge(null);
       return;
     }
 
@@ -422,6 +427,36 @@ export function ChallengeProvider({ children }: { children: ReactNode }) {
     setLinkedChallenge(challenge);
   }, [session.pubkey]);
 
+  const acceptLinkedChallenge = useCallback(async () => {
+    if (!linkedChallenge) return;
+
+    const nextChallenge: CachedChallenge = {
+      ...linkedChallenge,
+      state: 'accepted',
+      updatedAt: Date.now(),
+    };
+
+    await cacheDb.challenges.put(nextChallenge);
+    setLinkedChallenge(nextChallenge);
+    setActiveChallenge(nextChallenge);
+    await refreshChallenges();
+  }, [linkedChallenge, refreshChallenges]);
+
+  const rejectLinkedChallenge = useCallback(async () => {
+    if (!linkedChallenge) return;
+
+    const nextChallenge: CachedChallenge = {
+      ...linkedChallenge,
+      state: 'rejected',
+      updatedAt: Date.now(),
+    };
+
+    await cacheDb.challenges.put(nextChallenge);
+    setLinkedChallenge(nextChallenge);
+    setActiveChallenge(null);
+    await refreshChallenges();
+  }, [linkedChallenge, refreshChallenges]);
+
   const filteredChallenges = useMemo(() => {
     if (selectedFilter === 'all') return challenges;
     if (selectedFilter === 'friendly') return challenges.filter((challenge) => challenge.mode === 'friendly');
@@ -447,18 +482,21 @@ export function ChallengeProvider({ children }: { children: ReactNode }) {
       rivalMatches,
       rivalProfiles,
       linkedChallenge,
+      activeChallenge,
       draft,
       setDraft,
       selectRival,
       createChallenge,
       refreshChallenges,
       loadLinkedChallenge,
+      acceptLinkedChallenge,
+      rejectLinkedChallenge,
       challengeError,
       clearChallengeError,
       selectedFilter,
       setSelectedFilter,
     }),
-    [filteredChallenges, recentRivals, followingRivals, rivalMatches, rivalProfiles, linkedChallenge, draft, setDraft, selectRival, createChallenge, refreshChallenges, loadLinkedChallenge, challengeError, clearChallengeError, selectedFilter]
+    [filteredChallenges, recentRivals, followingRivals, rivalMatches, rivalProfiles, linkedChallenge, activeChallenge, draft, setDraft, selectRival, createChallenge, refreshChallenges, loadLinkedChallenge, acceptLinkedChallenge, rejectLinkedChallenge, challengeError, clearChallengeError, selectedFilter]
   );
 
   return <ChallengeContext.Provider value={value}>{children}</ChallengeContext.Provider>;

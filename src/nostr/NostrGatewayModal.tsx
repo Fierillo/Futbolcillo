@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { ArrowLeft, ChevronDown, LoaderCircle, PlugZap, QrCode, RefreshCcw, Shield, Swords, Wallet, Wifi, X, Zap } from 'lucide-react';
+import { ArrowLeft, CheckCircle2, ChevronDown, LoaderCircle, PlugZap, QrCode, RefreshCcw, Shield, Swords, Wallet, Wifi, X, Zap } from 'lucide-react';
 import { useChallengeStore } from '../challenge/store';
 import { ChallengeComposer } from '../challenge/ChallengeComposer';
 import { ChallengeHistoryPanel } from '../challenge/ChallengeHistoryPanel';
@@ -28,30 +28,47 @@ const features: NostrFeatureCard[] = [
   },
 ];
 
-type ModalStep = 'intro' | 'connect' | 'invite';
+type ModalStep = 'intro' | 'connect' | 'received' | 'invite';
 
 export function NostrGatewayModal({ onClose, linkedChallengeId = '', linkedChallengeToken = '' }: Props) {
+  const hasLinkedChallenge = Boolean(linkedChallengeId && linkedChallengeToken);
   const [bunkerToken, setBunkerToken] = useState('');
   const [showQr, setShowQr] = useState(false);
   const [showTechnicalNotes, setShowTechnicalNotes] = useState(false);
-  const [step, setStep] = useState<ModalStep>('intro');
+  const [step, setStep] = useState<ModalStep>(hasLinkedChallenge ? 'connect' : 'intro');
   const { session, connectNip07, connectBunker, disconnect, refreshProfile } = useNostrSession();
-  const { linkedChallenge, loadLinkedChallenge } = useChallengeStore();
+  const { linkedChallenge, loadLinkedChallenge, acceptLinkedChallenge, rejectLinkedChallenge } = useChallengeStore();
   const relays = getRelayList();
   const isBusy = session.status === 'connecting';
   const bunkerQrUrl = bunkerToken.trim()
     ? `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(bunkerToken.trim())}`
     : '';
 
-  const activeStep = session.status === 'connected' ? 'invite' : linkedChallengeId ? 'connect' : step;
+  const activeStep =
+    session.status === 'connected'
+      ? linkedChallenge && linkedChallenge.state === 'received'
+        ? 'received'
+        : 'invite'
+      : hasLinkedChallenge
+        ? 'connect'
+        : step;
 
-  const stepTitle = activeStep === 'intro' ? 'Modo Nostr' : activeStep === 'connect' ? 'Conectá tu identidad' : 'Invitá a un rival';
+  const stepTitle =
+    activeStep === 'intro'
+      ? 'Modo Nostr'
+      : activeStep === 'connect'
+        ? 'Conectá tu identidad'
+        : activeStep === 'received'
+          ? 'Desafío recibido'
+          : 'Invitá a un rival';
   const stepHint =
     activeStep === 'intro'
       ? 'Más juego, más riesgo y más calle.'
       : activeStep === 'connect'
         ? 'Entrá con extensión o con bunker.'
-        : 'Ya entraste. Ahora toca retar a alguien.';
+        : activeStep === 'received'
+          ? 'Conectaste bien. Ahora decidí si jugás este reto.'
+          : 'Ya entraste. Ahora toca retar a alguien.';
 
   useEffect(() => {
     if (session.status !== 'connected' || !linkedChallengeId || !linkedChallengeToken) return;
@@ -68,7 +85,7 @@ export function NostrGatewayModal({ onClose, linkedChallengeId = '', linkedChall
             <p className="mt-1 text-sm text-stone-400">{stepTitle}. {stepHint}</p>
           </div>
           <div className="flex items-center gap-2">
-            {activeStep !== 'intro' && session.status !== 'connected' && (
+            {activeStep !== 'intro' && session.status !== 'connected' && !hasLinkedChallenge && (
               <button
                 type="button"
                 onClick={() => setStep('intro')}
@@ -105,7 +122,56 @@ export function NostrGatewayModal({ onClose, linkedChallengeId = '', linkedChall
           </div>
         )}
 
-        {activeStep === 'intro' && (
+        {activeStep === 'received' && linkedChallenge && (
+          <div className="mt-4 space-y-4">
+            <div className="rounded-3xl border border-emerald-800/60 bg-[radial-gradient(circle_at_top,rgba(16,185,129,0.18),transparent_55%),linear-gradient(180deg,rgba(6,78,59,0.28),rgba(12,10,9,0.1))] p-4">
+              <div className="flex items-start gap-3">
+                <div className="mt-1 rounded-full bg-emerald-600/20 p-2 text-emerald-300">
+                  <CheckCircle2 size={18} />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-lg font-bold text-white">
+                    {linkedChallenge.mode === 'wager' ? 'Te desafiaron por sats' : 'Te llegó un amistoso'}
+                  </p>
+                  <p className="mt-1 text-sm text-emerald-100/80">
+                    {linkedChallenge.rivalName}{' '}
+                    {linkedChallenge.mode === 'wager'
+                      ? `te espera en Futbolcillo por ${linkedChallenge.amountSats} sats.`
+                      : 'te está esperando en Futbolcillo.'}
+                  </p>
+                  <div className="mt-3 flex flex-wrap gap-2 text-xs uppercase tracking-wider text-emerald-100/75">
+                    <span className="rounded-full border border-emerald-700/50 px-2 py-1">ID {linkedChallenge.id}</span>
+                    <span className="rounded-full border border-emerald-700/50 px-2 py-1">Vence en 24h</span>
+                    {linkedChallenge.mode === 'wager' && (
+                      <span className="rounded-full border border-amber-700/50 px-2 py-1 text-amber-200">
+                        {linkedChallenge.amountSats} sats
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <button
+                type="button"
+                onClick={() => void acceptLinkedChallenge()}
+                className="rounded-2xl bg-emerald-600 px-4 py-3 text-sm font-bold uppercase tracking-wider text-white transition-colors hover:bg-emerald-500"
+              >
+                Aceptar y jugar
+              </button>
+              <button
+                type="button"
+                onClick={() => void rejectLinkedChallenge()}
+                className="rounded-2xl bg-stone-800 px-4 py-3 text-sm font-bold uppercase tracking-wider text-stone-200 transition-colors hover:bg-stone-700"
+              >
+                Rechazar
+              </button>
+            </div>
+          </div>
+        )}
+
+        {activeStep === 'intro' && !hasLinkedChallenge && (
           <>
             <div className="grid gap-3 sm:grid-cols-3">
               {features.map((feature, index) => (

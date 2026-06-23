@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Goal, Trophy, RotateCcw, Info, X, Volume2, VolumeX } from 'lucide-react';
+import { useChallengeStore } from './challenge/store';
 import TejoCanvas from './game/TejoCanvas';
 import { preparePhaseOneInfrastructure, usePhaseOneBoot } from './app/use-phase-one-boot';
 import {
@@ -28,6 +29,7 @@ export default function App() {
   const containerRef = useRef<HTMLDivElement>(null);
   const { setSyncState } = useSyncStatus();
   const { session, refreshProfile } = useNostrSession();
+  const { activeChallenge } = useChallengeStore();
 
   usePhaseOneBoot();
 
@@ -55,6 +57,14 @@ export default function App() {
   useEffect(() => {
     gameStateRef.current = gameState;
   }, [gameState]);
+
+  useEffect(() => {
+    if (!activeChallenge) return;
+
+    setGameState(createInitialState());
+    setShowNostrGateway(false);
+    setShowHelp(false);
+  }, [activeChallenge]);
 
   // Responsive scaling
   useEffect(() => {
@@ -180,9 +190,9 @@ export default function App() {
   };
   const homeIdentity = session.profile;
   const awayIdentity = {
-    name: 'Máquina',
-    pubkey: 'training-bot',
-    avatarUrl: 'https://api.dicebear.com/9.x/bottts/svg?seed=training-bot',
+    name: activeChallenge?.rivalName || 'Máquina',
+    pubkey: activeChallenge?.rivalPubkey || 'training-bot',
+    avatarUrl: `https://api.dicebear.com/9.x/bottts/svg?seed=${activeChallenge?.rivalPubkey || 'training-bot'}`,
   };
 
   return (
@@ -194,7 +204,13 @@ export default function App() {
             Futbolcillo
           </h1>
           <p className="mt-1 text-xs uppercase tracking-[0.25em] text-stone-500">
-            {session.status === 'connected' ? `Identidad lista: ${session.method === 'nip07' ? 'NIP-07' : 'Bunker'}` : 'Modo entrenamiento activo'}
+            {activeChallenge
+              ? activeChallenge.mode === 'wager'
+                ? `Partida en juego: ${activeChallenge.amountSats} sats`
+                : 'Partida amistosa activa'
+              : session.status === 'connected'
+                ? `Identidad lista: ${session.method === 'nip07' ? 'NIP-07' : 'Bunker'}`
+                : 'Modo entrenamiento activo'}
           </p>
         </div>
 
