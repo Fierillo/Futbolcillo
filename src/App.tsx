@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Goal, Trophy, RotateCcw, Info, X, Volume2, VolumeX } from 'lucide-react';
+import { Goal, LoaderCircle, Trophy, RotateCcw, Info, X, Volume2, VolumeX } from 'lucide-react';
 import { useChallengeStore } from './challenge/store';
 import TejoCanvas from './game/TejoCanvas';
 import { preparePhaseOneInfrastructure, usePhaseOneBoot } from './app/use-phase-one-boot';
@@ -15,6 +15,7 @@ import { NostrGatewayModal } from './nostr/NostrGatewayModal';
 import { useNostrSession } from './nostr/session-store';
 import { GlobalSyncStatus } from './online/GlobalSyncStatus';
 import { useSyncStatus } from './online/sync-store';
+import { useMatchStore } from './match/store';
 
 export default function App() {
   const [gameState, setGameState] = useState<GameState>(createInitialState);
@@ -30,6 +31,7 @@ export default function App() {
   const { setSyncState } = useSyncStatus();
   const { session, refreshProfile } = useNostrSession();
   const { activeChallenge, pendingIncomingCount } = useChallengeStore();
+  const { activeMatchId, matchState, matchError, isCreatingMatch, createMatch, submitShot, clearMatch } = useMatchStore();
   const localTeam = activeChallenge?.direction === 'incoming' ? 'away' : activeChallenge?.direction === 'outgoing' ? 'home' : null;
 
   usePhaseOneBoot();
@@ -65,7 +67,11 @@ export default function App() {
     setGameState(createInitialState());
     setShowNostrGateway(false);
     setShowHelp(false);
-  }, [activeChallenge]);
+
+    if (activeChallenge.state === 'accepted') {
+      void createMatch(activeChallenge);
+    }
+  }, [activeChallenge, createMatch]);
 
   // Responsive scaling
   useEffect(() => {
@@ -83,8 +89,42 @@ export default function App() {
     return () => window.removeEventListener('resize', updateScale);
   }, []);
 
-  // Game loop
+  // Sync server state to local game state when in online mode
   useEffect(() => {
+    if (!matchState || !activeMatchId) return;
+
+    setGameState((prev) => {
+      const next = { ...prev };
+      next.players = matchState.players.map((p) => ({
+        ...p,
+        isSelected: false,
+        cooldown: 0,
+        color: p.team === 'home' ? '#1e40af' : '#b91c1c',
+        strokeColor: p.team === 'home' ? '#60a5fa' : '#f87171',
+      }));
+      next.ball = {
+        ...matchState.ball,
+        color: '#fbbf24',
+        strokeColor: '#f59e0b',
+      };
+      next.goals = matchState.goals;
+      next.score = { ...matchState.score };
+      next.turn = matchState.turn;
+      next.phase = matchState.phase;
+      next.winner = matchState.winner;
+      next.activeShotPlayer = matchState.activeShotPlayer;
+      next.activeShotTouchedBall = matchState.activeShotTouchedBall;
+      next.activeShotCommittedFoul = matchState.activeShotCommittedFoul;
+      next.bonusTurnTeam = matchState.bonusTurnTeam;
+      next.pendingBonusTurns = matchState.pendingBonusTurns;
+      return next;
+    });
+  }, [matchState, activeMatchId]);
+
+  // Game loop (only runs in training mode)
+  useEffect(() => {
+    if (activeMatchId) return;
+
     let lastTime = performance.now();
 
     const loop = (time: number) => {
@@ -93,7 +133,6 @@ export default function App() {
 
       setGameState((prev) => {
         const next = { ...prev };
-        // Deep copy arrays
         next.players = prev.players.map((p) => ({ ...p }));
         next.particles = prev.particles.map((p) => ({ ...p }));
         next.ball = { ...prev.ball, trail: [...prev.ball.trail] };
@@ -111,7 +150,7 @@ export default function App() {
 
     animFrameRef.current = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(animFrameRef.current);
-  }, []);
+  }, [activeMatchId]);
 
   const onMouseDown = useCallback((x: number, y: number) => {
     if (activeChallenge && gameStateRef.current.turn !== localTeam) return;
@@ -151,6 +190,9 @@ export default function App() {
     if (activeChallenge && gameStateRef.current.turn !== localTeam) return;
 
     setGameState((prev) => {
+      const selectedPlayer = prev.selectedPlayer !== null ? prev.players[prev.selectedPlayer] : null;
+      const dragStart = prev.dragStart;
+      const dragCurrent = prev.dragCurrent;
       const next = { ...prev };
       next.players = prev.players.map((p) => ({ ...p }));
       next.particles = prev.particles.map((p) => ({ ...p }));
@@ -159,10 +201,29 @@ export default function App() {
       next.score = { ...prev.score };
       next.dragStart = prev.dragStart ? { ...prev.dragStart } : null;
       next.dragCurrent = prev.dragCurrent ? { ...prev.dragCurrent } : null;
-      handleMouseUp(next);
+
+      if (activeMatchId && selectedPlayer && dragStart && dragCurrent) {
+        const dx = dragStart.x - dragCurrent.x;
+        const dy = dragStart.y - dragCurrent.y;
+        const power = Math.sqrt(dx * dx + dy * dy) * 0.15;
+        const clampedPower = Math.max(0, Math.min(power, 18));
+
+        if (clampedPower > 1) {
+          const length = Math.sqrt(dx * dx + dy * dy) || 1;
+          const velX = (dx / length) * clampedPower;
+          const velY = (dy / length) * clampedPower;
+          const playerIndex = next.players.findIndex((p) => p.team === selectedPlayer.team && p.number === selectedPlayer.number);
+          if (playerIndex !== -1) {
+            void submitShot(playerIndex, velX, velY);
+          }
+        }
+      } else {
+        handleMouseUp(next);
+      }
+
       return next;
     });
-  }, [activeChallenge, localTeam]);
+  }, [activeChallenge, activeMatchId, localTeam, submitShot]);
 
   const resetGame = () => {
     setGameState(createInitialState());
@@ -211,13 +272,17 @@ export default function App() {
             Futbolcillo
           </h1>
           <p className="mt-1 text-xs uppercase tracking-[0.25em] text-stone-500">
-            {activeChallenge
-              ? activeChallenge.mode === 'wager'
-                ? `Partida en juego: ${activeChallenge.amountSats} sats`
-                : 'Partida amistosa activa'
-              : session.status === 'connected'
-                ? `Identidad lista: ${session.method === 'nip07' ? 'NIP-07' : 'Bunker'}`
-                : 'Modo entrenamiento activo'}
+            {isCreatingMatch
+              ? 'Creando partida...'
+              : activeMatchId
+                ? `Partida online • ${matchState?.turn === localTeam ? 'Tu turno' : 'Turno del rival'}`
+                : activeChallenge
+                  ? activeChallenge.mode === 'wager'
+                    ? `Partida en juego: ${activeChallenge.amountSats} sats`
+                    : 'Partida amistosa activa'
+                  : session.status === 'connected'
+                    ? `Identidad lista: ${session.method === 'nip07' ? 'NIP-07' : 'Bunker'}`
+                    : 'Modo entrenamiento activo'}
           </p>
         </div>
 
@@ -325,6 +390,33 @@ export default function App() {
               className="rounded-lg bg-stone-700 px-3 py-2 font-semibold text-white transition-colors hover:bg-stone-600"
             >
               Actualizar perfil
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Match creation overlay */}
+      {isCreatingMatch && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+          <div className="bg-stone-800 rounded-2xl p-8 text-center shadow-2xl max-w-sm mx-4 border border-stone-700">
+            <LoaderCircle size={48} className="mx-auto mb-4 animate-spin text-emerald-400" />
+            <h2 className="text-xl font-bold mb-2">Creando partida...</h2>
+            <p className="text-sm text-stone-400">Conectando con el servidor y preparando el campo.</p>
+          </div>
+        </div>
+      )}
+
+      {/* Match error toast */}
+      {matchError && (
+        <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 max-w-md">
+          <div className="flex items-center gap-3 rounded-xl border border-red-800 bg-red-950/90 px-4 py-3 text-sm text-red-200 shadow-2xl">
+            <span className="flex-1">{matchError}</span>
+            <button
+              type="button"
+              onClick={clearMatch}
+              className="rounded-lg bg-red-800 px-3 py-1 text-xs font-semibold text-white transition-colors hover:bg-red-700"
+            >
+              Cerrar
             </button>
           </div>
         </div>
