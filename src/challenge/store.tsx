@@ -258,34 +258,34 @@ export function ChallengeProvider({ children }: { children: ReactNode }) {
           rivalName?: string;
         };
 
-        if (payload.type !== 'futbolcillo_challenge') return;
+        if (payload.type === 'futbolcillo_challenge') {
+          const senderPubkey = event.pubkey;
+          const existingProfile = await cacheDb.profiles.get(senderPubkey);
+          if (!existingProfile) {
+            await cacheDb.profiles.put({
+              pubkey: senderPubkey,
+              avatarUrl: `https://api.dicebear.com/9.x/shapes/svg?seed=${senderPubkey}`,
+              displayName: payload.rivalName || `Rival ${senderPubkey.slice(0, 8)}`,
+              nip05: '',
+              lud16: '',
+              updatedAt: Date.now(),
+            });
+          }
 
-        const senderPubkey = event.pubkey;
-        const existingProfile = await cacheDb.profiles.get(senderPubkey);
-        if (!existingProfile) {
-          await cacheDb.profiles.put({
-            pubkey: senderPubkey,
-            avatarUrl: `https://api.dicebear.com/9.x/shapes/svg?seed=${senderPubkey}`,
-            displayName: payload.rivalName || `Rival ${senderPubkey.slice(0, 8)}`,
-            nip05: '',
-            lud16: '',
+          await cacheDb.challenges.put({
+            id: payload.challengeId,
+            accessToken: payload.accessToken,
+            ownerPubkey: session.pubkey,
+            mode: payload.mode,
+            state: 'received',
+            rivalPubkey: senderPubkey,
+            rivalName: existingProfile?.displayName || payload.rivalName || `Rival ${senderPubkey.slice(0, 8)}`,
+            amountSats: payload.amountSats,
+            expirationAt: payload.expirationAt,
+            createdAt: payload.createdAt,
             updatedAt: Date.now(),
           });
         }
-
-        await cacheDb.challenges.put({
-          id: payload.challengeId,
-          accessToken: payload.accessToken,
-          ownerPubkey: session.pubkey,
-          mode: payload.mode,
-          state: 'received',
-          rivalPubkey: senderPubkey,
-          rivalName: existingProfile?.displayName || payload.rivalName || `Rival ${senderPubkey.slice(0, 8)}`,
-          amountSats: payload.amountSats,
-          expirationAt: payload.expirationAt,
-          createdAt: payload.createdAt,
-          updatedAt: Date.now(),
-        });
 
         if (!stopped) {
           await refreshChallenges();
