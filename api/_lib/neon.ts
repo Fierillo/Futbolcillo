@@ -1,26 +1,32 @@
-import { neon } from '@neondatabase/serverless';
-
 export type SqlPrimitive = string | number | boolean | null;
 
-let sqlClient: ReturnType<typeof neon> | null = null;
+type NeonClient = Awaited<ReturnType<typeof createSqlClient>>;
 
-export function getSql() {
-  if (sqlClient) return sqlClient;
+let sqlClientPromise: Promise<NeonClient> | null = null;
 
+async function createSqlClient() {
   const neonUrl = process.env.NEON_URL;
   if (!neonUrl) {
     throw new Error('NEON_URL environment variable is not configured');
   }
 
-  sqlClient = neon(neonUrl);
-  return sqlClient;
+  const { neon } = await import('@neondatabase/serverless');
+  return neon(neonUrl);
+}
+
+export async function getSql() {
+  if (!sqlClientPromise) {
+    sqlClientPromise = createSqlClient();
+  }
+
+  return sqlClientPromise;
 }
 
 export async function query<T extends Record<string, SqlPrimitive> = Record<string, SqlPrimitive>>(
   strings: TemplateStringsArray,
   ...values: SqlPrimitive[]
 ) {
-  const sql = getSql();
+  const sql = await getSql();
   return (await sql<T>(strings, ...values)) as T[];
 }
 
