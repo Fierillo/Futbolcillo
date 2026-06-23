@@ -30,6 +30,7 @@ export default function App() {
   const { setSyncState } = useSyncStatus();
   const { session, refreshProfile } = useNostrSession();
   const { activeChallenge } = useChallengeStore();
+  const localTeam = activeChallenge?.direction === 'incoming' ? 'away' : activeChallenge?.direction === 'outgoing' ? 'home' : null;
 
   usePhaseOneBoot();
 
@@ -189,7 +190,6 @@ export default function App() {
   const turnText = gameState.turn === 'home' ? 'LOCAL' : 'RIVAL';
   const turnColor = gameState.turn === 'home' ? 'text-blue-400' : 'text-red-400';
   const phaseText = gameState.phase === 'aiming' ? 'Apuntá y pateá' : 'En juego...';
-  const localTeam = activeChallenge?.direction === 'incoming' ? 'away' : activeChallenge?.direction === 'outgoing' ? 'home' : null;
   const shortenPubkey = (value: string) => {
     if (!value) return '';
     if (value.length <= 16) return value;
