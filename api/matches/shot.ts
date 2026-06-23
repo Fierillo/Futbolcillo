@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { query } from '../_lib/neon';
 import { getJsonBody, requireMethod } from '../_lib/http';
-import { simulateShot, type MatchState } from '../../src/game/physics';
+import { simulateShot, type MatchState } from '../_lib/physics';
 
 type ShotBody = {
   matchId: string;

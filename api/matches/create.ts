@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { query } from '../_lib/neon';
 import { getJsonBody, requireMethod } from '../_lib/http';
-import { createInitialMatchState } from '../../src/game/physics';
+import { createInitialMatchState } from '../_lib/physics';
 
 type CreateMatchBody = {
   challengeId: string;
