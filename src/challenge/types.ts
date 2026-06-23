@@ -10,10 +10,13 @@ export type ChallengeState =
   | 'cancelled'
   | 'finalized';
 
+export type ChallengeDirection = 'outgoing' | 'incoming';
+
 export interface CachedChallenge {
   id: string;
   accessToken: string;
   ownerPubkey: string;
+  direction: ChallengeDirection;
   mode: ChallengeMode;
   state: ChallengeState;
   rivalPubkey: string;

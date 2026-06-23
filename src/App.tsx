@@ -113,6 +113,8 @@ export default function App() {
   }, []);
 
   const onMouseDown = useCallback((x: number, y: number) => {
+    if (activeChallenge && gameStateRef.current.turn !== localTeam) return;
+
     setGameState((prev) => {
       const next = { ...prev };
       next.players = prev.players.map((p) => ({ ...p }));
@@ -125,9 +127,11 @@ export default function App() {
       handleMouseDown(next, x, y);
       return next;
     });
-  }, []);
+  }, [activeChallenge, localTeam]);
 
   const onMouseMove = useCallback((x: number, y: number) => {
+    if (activeChallenge && gameStateRef.current.turn !== localTeam) return;
+
     setGameState((prev) => {
       const next = { ...prev };
       next.players = prev.players.map((p) => ({ ...p }));
@@ -140,9 +144,11 @@ export default function App() {
       handleMouseMove(next, x, y);
       return next;
     });
-  }, []);
+  }, [activeChallenge, localTeam]);
 
   const onMouseUp = useCallback(() => {
+    if (activeChallenge && gameStateRef.current.turn !== localTeam) return;
+
     setGameState((prev) => {
       const next = { ...prev };
       next.players = prev.players.map((p) => ({ ...p }));
@@ -155,7 +161,7 @@ export default function App() {
       handleMouseUp(next);
       return next;
     });
-  }, []);
+  }, [activeChallenge, localTeam]);
 
   const resetGame = () => {
     setGameState(createInitialState());
@@ -183,6 +189,7 @@ export default function App() {
   const turnText = gameState.turn === 'home' ? 'LOCAL' : 'RIVAL';
   const turnColor = gameState.turn === 'home' ? 'text-blue-400' : 'text-red-400';
   const phaseText = gameState.phase === 'aiming' ? 'Apuntá y pateá' : 'En juego...';
+  const localTeam = activeChallenge?.direction === 'incoming' ? 'away' : activeChallenge?.direction === 'outgoing' ? 'home' : null;
   const shortenPubkey = (value: string) => {
     if (!value) return '';
     if (value.length <= 16) return value;
