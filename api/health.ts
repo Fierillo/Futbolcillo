@@ -3,6 +3,16 @@ import { checkDatabaseConnection } from './_lib/neon';
 
 export default async function handler(_req: VercelRequest, res: VercelResponse) {
   try {
+    const neonUrl = process.env.NEON_URL;
+    if (!neonUrl) {
+      res.status(500).json({
+        ok: false,
+        service: 'futbolcillo-api',
+        error: 'NEON_URL not configured',
+      });
+      return;
+    }
+
     const database = await checkDatabaseConnection();
 
     res.status(200).json({

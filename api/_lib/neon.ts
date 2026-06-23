@@ -1,15 +1,18 @@
 import { neon } from '@neondatabase/serverless';
-import { getNeonUrl } from './env';
 
 export type SqlPrimitive = string | number | boolean | null;
 
 let sqlClient: ReturnType<typeof neon> | null = null;
 
 export function getSql() {
-  if (!sqlClient) {
-    sqlClient = neon(getNeonUrl());
+  if (sqlClient) return sqlClient;
+
+  const neonUrl = process.env.NEON_URL;
+  if (!neonUrl) {
+    throw new Error('NEON_URL environment variable is not configured');
   }
 
+  sqlClient = neon(neonUrl);
   return sqlClient;
 }
 
