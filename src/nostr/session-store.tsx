@@ -111,24 +111,53 @@ export function NostrSessionProvider({ children }: { children: ReactNode }) {
     setSession(nextSession);
   }, []);
 
+  const reattachSigner = useCallback(async (method: NostrConnectionMethod) => {
+    const ndk = getNostrClient();
+
+    if (method === 'nip07') {
+      if (ndk.signer) return true;
+      if (typeof window === 'undefined' || !window.nostr) return false;
+      ndk.signer = new NDKNip07Signer();
+      return true;
+    }
+
+    if (method === 'bunker') {
+      if (ndk.signer) return true;
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) return false;
+      try {
+        const parsed = JSON.parse(raw) as { pubkey: string; method: NostrConnectionMethod; bunkerToken?: string };
+        if (!parsed.bunkerToken) return false;
+        const signer = NDKNip46Signer.bunker(ndk, parsed.bunkerToken);
+        ndk.signer = signer;
+        return true;
+      } catch {
+        return false;
+      }
+    }
+
+    return false;
+  }, []);
+
   useEffect(() => {
     const restore = async () => {
       const raw = localStorage.getItem(STORAGE_KEY);
       if (!raw) return;
 
       try {
-        const parsed = JSON.parse(raw) as { pubkey: string; method: NostrConnectionMethod };
+        const parsed = JSON.parse(raw) as { pubkey: string; method: NostrConnectionMethod; bunkerToken?: string };
         if (!parsed.pubkey || !parsed.method) return;
 
         const ndk = getNostrClient();
+        const signerReady = await reattachSigner(parsed.method);
         const profile = await resolveProfile(parsed.pubkey, ndk);
 
         setSession({
-          status: 'connected',
+          status: signerReady ? 'connected' : 'error',
           method: parsed.method,
           pubkey: parsed.pubkey,
           profile: toIdentity(profile),
-          error: '',
+          error: signerReady ? '' : 'No se pudo reconectar el signer. Volvé a conectar.',
         });
       } catch {
         localStorage.removeItem(STORAGE_KEY);
@@ -136,7 +165,29 @@ export function NostrSessionProvider({ children }: { children: ReactNode }) {
     };
 
     void restore();
-  }, []);
+  }, [reattachSigner]);
+
+  useEffect(() => {
+    const onVisibilityChange = async () => {
+      if (document.visibilityState !== 'visible') return;
+      if (session.status !== 'connected' || !session.method) return;
+
+      const ndk = getNostrClient();
+      if (ndk.signer) return;
+
+      const ok = await reattachSigner(session.method);
+      if (!ok) {
+        setSession((prev) => ({
+          ...prev,
+          status: 'error',
+          error: 'Se perdió la conexión con el signer. Volvé a conectar.',
+        }));
+      }
+    };
+
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', onVisibilityChange);
+  }, [session.status, session.method, reattachSigner]);
 
   const connectNip07 = useCallback(async () => {
     setSession((prev) => ({ ...prev, status: 'connecting', method: 'nip07', error: '' }));
@@ -167,6 +218,13 @@ export function NostrSessionProvider({ children }: { children: ReactNode }) {
       ndk.signer = signer;
       const user = await withTimeout(signer.user(), 12000);
       await setConnectedSession(user.pubkey, 'bunker', ndk);
+
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw) as Record<string, unknown>;
+        parsed.bunkerToken = token;
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(parsed));
+      }
     } catch (error) {
       setSession({
         status: 'error',
