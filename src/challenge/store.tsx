@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, t
 import NDK, { NDKEvent, NDKKind } from '@nostr-dev-kit/ndk';
 import { nip19 } from 'nostr-tools';
 import { cacheDb } from '../cache/db';
+import { getPublicAppUrl } from '../config/public-app-url';
 import { getNostrClient } from '../nostr/client';
 import { useNostrSession } from '../nostr/session-store';
 import type { CachedChallenge, ChallengeFilter, ChallengeMode, ChallengeState } from './types';
@@ -111,7 +112,7 @@ async function sendChallengeDirectMessage(
   rivalName: string
 ) {
   const recipient = ndk.getUser({ pubkey: challenge.rivalPubkey });
-  const siteUrl = typeof window !== 'undefined' ? window.location.origin : 'https://futbolcillo.app';
+  const siteUrl = getPublicAppUrl();
   const challengeUrl = `${siteUrl}?challenge=${challenge.id}&token=${challenge.accessToken}`;
   const message =
     challenge.mode === 'wager'
@@ -152,7 +153,10 @@ async function sendChallengeDirectMessage(
     ],
   });
 
+  // Use classic kind:4 + nip04 for maximum client compatibility.
   await event.encrypt(recipient, undefined, 'nip04');
+  event.tags.push(['encryption', 'nip04']);
+
   await event.publish();
 }
 
