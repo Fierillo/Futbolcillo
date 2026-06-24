@@ -63,7 +63,7 @@ function ChallengeActionButton({
     );
   }
 
-  if (state === 'accepted') {
+  if (state === 'accepted' || state === 'in_match') {
     return (
       <button
         type="button"
@@ -74,7 +74,7 @@ function ChallengeActionButton({
         className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold text-white transition-colors ${isActive ? 'bg-amber-500 cursor-default' : 'bg-amber-600 hover:bg-amber-500'}`}
       >
         <Play size={13} />
-        {isActive ? 'Jugando' : 'Jugar'}
+        {isActive ? 'Jugando' : state === 'in_match' ? 'Volver' : 'Jugar'}
       </button>
     );
   }
@@ -139,7 +139,7 @@ export function ChallengeHistoryPanel({ onAction }: Props) {
             const rivalName = rivalProfile?.displayName || rivalProfile?.nip05 || challenge.rivalName;
             const rivalAvatar = rivalProfile?.avatarUrl || `https://api.dicebear.com/9.x/shapes/svg?seed=${challenge.rivalPubkey}`;
             const isActive = challenge.id === activeChallengeId;
-            const isPending = !isFinishedState(challenge.state) && challenge.state !== 'accepted';
+            const isPending = !isFinishedState(challenge.state) && challenge.state !== 'accepted' && challenge.state !== 'in_match';
 
             return (
               <div
@@ -162,6 +162,9 @@ export function ChallengeHistoryPanel({ onAction }: Props) {
                     )}
                     {challenge.direction === 'outgoing' && isPending && (
                       <span className="text-sky-400">Enviado</span>
+                    )}
+                    {challenge.state === 'in_match' && (
+                      <span className="text-amber-400">En partida</span>
                     )}
                     {challenge.mode === 'wager' && <span>{challenge.amountSats} sats</span>}
                   </div>
