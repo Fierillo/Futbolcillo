@@ -40,6 +40,7 @@ export interface PhysicsGoal {
 }
 
 export interface ShotAnimation {
+  id: string;
   initialState: MatchState;
   playerIndex: number;
   velX: number;
@@ -59,7 +60,7 @@ export interface MatchState {
   activeShotTouchedBall: boolean;
   activeShotCommittedFoul: boolean;
   winner: 'home' | 'away' | null;
-  lastShot: { playerIndex: number; velX: number; velY: number } | null;
+  lastShot: { id: string; playerIndex: number; velX: number; velY: number } | null;
   lastShotAnimation: ShotAnimation | null;
 }
 
@@ -221,6 +222,7 @@ export function simulateShot(
   playerIndex: number,
   velX: number,
   velY: number,
+  shotId = 'local-shot',
   maxFrames = 600
 ): MatchState {
   const deepState: MatchState = JSON.parse(JSON.stringify(state));
@@ -232,6 +234,7 @@ export function simulateShot(
 
   // Store animation data BEFORE simulating - both clients replay from this
   deepState.lastShotAnimation = {
+    id: shotId,
     initialState: JSON.parse(JSON.stringify(deepState)),
     playerIndex,
     velX,
@@ -244,7 +247,7 @@ export function simulateShot(
   deepState.activeShotPlayer = playerIndex;
   deepState.activeShotTouchedBall = false;
   deepState.activeShotCommittedFoul = false;
-  deepState.lastShot = { playerIndex, velX, velY };
+  deepState.lastShot = { id: shotId, playerIndex, velX, velY };
 
   for (let frame = 0; frame < maxFrames; frame++) {
     const done = simulateStep(deepState);

@@ -1,4 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
+import { randomUUID } from 'node:crypto';
 import { query } from '../_lib/neon.js';
 import { getJsonBody, requireMethod } from '../_lib/http.js';
 import { simulateShot, type MatchState } from '../_lib/physics.js';
@@ -71,7 +72,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return;
     }
 
-    const newState = simulateShot(currentState, body.playerIndex, body.velX, body.velY);
+    const shotId = randomUUID();
+    const newState = simulateShot(currentState, body.playerIndex, body.velX, body.velY, shotId);
 
     await query`
       update matches set current_state = ${JSON.stringify(newState)}::jsonb, updated_at = now() where id = ${body.matchId}

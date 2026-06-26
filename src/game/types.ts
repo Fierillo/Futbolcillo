@@ -47,8 +47,8 @@ export interface GameState {
   dragStart: Vec2 | null;
   dragCurrent: Vec2 | null;
   winner: 'home' | 'away' | null;
-  lastShot: { playerIndex: number; velX: number; velY: number } | null;
-  lastShotAnimation: { initialState: GameState; playerIndex: number; velX: number; velY: number } | null;
+  lastShot: { id: string; playerIndex: number; velX: number; velY: number } | null;
+  lastShotAnimation: { id: string; initialState: GameState; playerIndex: number; velX: number; velY: number } | null;
   message: string;
   messageTimer: number;
   particles: Particle[];
