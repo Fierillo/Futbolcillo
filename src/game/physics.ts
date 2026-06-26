@@ -41,6 +41,13 @@ export interface PhysicsGoal {
   team: 'home' | 'away';
 }
 
+export interface ShotAnimation {
+  initialState: MatchState;
+  playerIndex: number;
+  velX: number;
+  velY: number;
+}
+
 export interface MatchState {
   players: PhysicsPlayer[];
   ball: PhysicsBall;
@@ -54,26 +61,28 @@ export interface MatchState {
   activeShotTouchedBall: boolean;
   activeShotCommittedFoul: boolean;
   winner: 'home' | 'away' | null;
+  lastShot: { playerIndex: number; velX: number; velY: number } | null;
+  lastShotAnimation: ShotAnimation | null;
 }
 
 export function createInitialMatchState(homePubkey: string, awayPubkey: string): MatchState & { homePubkey: string; awayPubkey: string } {
   const players: PhysicsPlayer[] = [];
-  const homePositions = [
+  const awayPositions = [
     { x: 180, y: 220 },
     { x: 180, y: 380 },
     { x: 320, y: 300 },
   ];
-  const awayPositions = [
+  const homePositions = [
     { x: 820, y: 220 },
     { x: 820, y: 380 },
     { x: 680, y: 300 },
   ];
 
-  homePositions.forEach((pos, i) => {
-    players.push({ pos: { x: pos.x, y: pos.y }, vel: { x: 0, y: 0 }, radius: PLAYER_RADIUS, mass: 3, team: 'home', number: i + 1 });
-  });
   awayPositions.forEach((pos, i) => {
     players.push({ pos: { x: pos.x, y: pos.y }, vel: { x: 0, y: 0 }, radius: PLAYER_RADIUS, mass: 3, team: 'away', number: i + 1 });
+  });
+  homePositions.forEach((pos, i) => {
+    players.push({ pos: { x: pos.x, y: pos.y }, vel: { x: 0, y: 0 }, radius: PLAYER_RADIUS, mass: 3, team: 'home', number: i + 1 });
   });
 
   return {
@@ -88,8 +97,8 @@ export function createInitialMatchState(homePubkey: string, awayPubkey: string):
       trail: [],
     },
     goals: [
-      { x: 0, y: FIELD_HEIGHT / 2 - GOAL_HEIGHT / 2, width: GOAL_WIDTH, height: GOAL_HEIGHT, team: 'home' },
-      { x: FIELD_WIDTH - GOAL_WIDTH, y: FIELD_HEIGHT / 2 - GOAL_HEIGHT / 2, width: GOAL_WIDTH, height: GOAL_HEIGHT, team: 'away' },
+      { x: 0, y: FIELD_HEIGHT / 2 - GOAL_HEIGHT / 2, width: GOAL_WIDTH, height: GOAL_HEIGHT, team: 'away' },
+      { x: FIELD_WIDTH - GOAL_WIDTH, y: FIELD_HEIGHT / 2 - GOAL_HEIGHT / 2, width: GOAL_WIDTH, height: GOAL_HEIGHT, team: 'home' },
     ],
     score: { home: 0, away: 0 },
     turn: 'home',
@@ -100,6 +109,8 @@ export function createInitialMatchState(homePubkey: string, awayPubkey: string):
     activeShotTouchedBall: false,
     activeShotCommittedFoul: false,
     winner: null,
+    lastShot: null,
+    lastShotAnimation: null,
   };
 }
 
@@ -156,8 +167,15 @@ function checkGoal(state: MatchState): 'home' | 'away' | null {
   for (const goal of state.goals) {
     const inGoalY = ball.pos.y > goal.y && ball.pos.y < goal.y + goal.height;
     if (!inGoalY) continue;
-    if (goal.team === 'home' && ball.pos.x < goal.x + goal.width) return 'away';
-    if (goal.team === 'away' && ball.pos.x > goal.x) return 'home';
+
+    const inGoalX = ball.pos.x >= goal.x && ball.pos.x <= goal.x + goal.width;
+    if (!inGoalX) continue;
+
+    if (goal.team === 'home') {
+      return 'away';
+    } else {
+      return 'home';
+    }
   }
   return null;
 }
@@ -167,12 +185,12 @@ function resetPositions(state: MatchState) {
   state.ball.vel = { x: 0, y: 0 };
   state.ball.trail = [];
 
-  const homePositions = [
+  const awayPositions = [
     { x: 180, y: 220 },
     { x: 180, y: 380 },
     { x: 320, y: 300 },
   ];
-  const awayPositions = [
+  const homePositions = [
     { x: 820, y: 220 },
     { x: 820, y: 380 },
     { x: 680, y: 300 },
@@ -181,12 +199,12 @@ function resetPositions(state: MatchState) {
   let hi = 0, ai = 0;
   for (const p of state.players) {
     p.vel = { x: 0, y: 0 };
-    if (p.team === 'home') {
-      p.pos = { x: homePositions[hi].x, y: homePositions[hi].y };
-      hi++;
-    } else {
+    if (p.team === 'away') {
       p.pos = { x: awayPositions[ai].x, y: awayPositions[ai].y };
       ai++;
+    } else {
+      p.pos = { x: homePositions[hi].x, y: homePositions[hi].y };
+      hi++;
     }
   }
 
@@ -214,6 +232,14 @@ export function simulateShot(
     return deepState;
   }
 
+  // Store animation data BEFORE simulating - both clients replay from this
+  deepState.lastShotAnimation = {
+    initialState: JSON.parse(JSON.stringify(deepState)),
+    playerIndex,
+    velX,
+    velY,
+  };
+
   player.vel.x = velX;
   player.vel.y = velY;
   deepState.phase = 'shooting';
@@ -222,116 +248,123 @@ export function simulateShot(
   deepState.activeShotCommittedFoul = false;
 
   for (let frame = 0; frame < maxFrames; frame++) {
-    let allStopped = true;
-
-    for (const p of deepState.players) {
-      p.pos.x += p.vel.x * MOVEMENT_SCALE;
-      p.pos.y += p.vel.y * MOVEMENT_SCALE;
-      p.vel.x *= FRICTION;
-      p.vel.y *= FRICTION;
-      if (Math.abs(p.vel.x) < STOP_THRESHOLD) p.vel.x = 0;
-      if (Math.abs(p.vel.y) < STOP_THRESHOLD) p.vel.y = 0;
-      if (Math.abs(p.vel.x) > 0.1 || Math.abs(p.vel.y) > 0.1) allStopped = false;
-
-      if (p.pos.x < p.radius) { p.pos.x = p.radius; p.vel.x = -p.vel.x * 0.6; }
-      if (p.pos.x > FIELD_WIDTH - p.radius) { p.pos.x = FIELD_WIDTH - p.radius; p.vel.x = -p.vel.x * 0.6; }
-      if (p.pos.y < p.radius) { p.pos.y = p.radius; p.vel.y = -p.vel.y * 0.6; }
-      if (p.pos.y > FIELD_HEIGHT - p.radius) { p.pos.y = FIELD_HEIGHT - p.radius; p.vel.y = -p.vel.y * 0.6; }
-    }
-
-    const ball = deepState.ball;
-    ball.pos.x += ball.vel.x * MOVEMENT_SCALE;
-    ball.pos.y += ball.vel.y * MOVEMENT_SCALE;
-    ball.vel.x *= FRICTION;
-    ball.vel.y *= FRICTION;
-    if (Math.abs(ball.vel.x) < STOP_THRESHOLD) ball.vel.x = 0;
-    if (Math.abs(ball.vel.y) < STOP_THRESHOLD) ball.vel.y = 0;
-    if (Math.abs(ball.vel.x) > 0.1 || Math.abs(ball.vel.y) > 0.1) allStopped = false;
-
-    if (Math.abs(ball.vel.x) > 1 || Math.abs(ball.vel.y) > 1) {
-      ball.trail.push({ x: ball.pos.x, y: ball.pos.y });
-      if (ball.trail.length > 15) ball.trail.shift();
-    } else if (ball.trail.length > 0) {
-      ball.trail.shift();
-    }
-
-    const inHomeGoal = ball.pos.y > deepState.goals[0].y && ball.pos.y < deepState.goals[0].y + deepState.goals[0].height;
-    const inAwayGoal = ball.pos.y > deepState.goals[1].y && ball.pos.y < deepState.goals[1].y + deepState.goals[1].height;
-    const goalsBlockedByFoul = deepState.activeShotCommittedFoul;
-
-    if (ball.pos.x < ball.radius) {
-      if (!(inHomeGoal && !goalsBlockedByFoul)) { ball.pos.x = ball.radius; ball.vel.x = -ball.vel.x * 0.6; }
-    }
-    if (ball.pos.x > FIELD_WIDTH - ball.radius) {
-      if (!(inAwayGoal && !goalsBlockedByFoul)) { ball.pos.x = FIELD_WIDTH - ball.radius; ball.vel.x = -ball.vel.x * 0.6; }
-    }
-    if (ball.pos.y < ball.radius) { ball.pos.y = ball.radius; ball.vel.y = -ball.vel.y * 0.6; }
-    if (ball.pos.y > FIELD_HEIGHT - ball.radius) { ball.pos.y = FIELD_HEIGHT - ball.radius; ball.vel.y = -ball.vel.y * 0.6; }
-
-    const goalScorer = goalsBlockedByFoul ? null : checkGoal(deepState);
-    if (goalScorer) {
-      deepState.score[goalScorer]++;
-      if (deepState.score[goalScorer] >= WIN_SCORE) {
-        deepState.winner = goalScorer;
-      }
-      resetPositions(deepState);
-      return deepState;
-    }
-
-    for (let i = 0; i < deepState.players.length; i++) {
-      const p = deepState.players[i];
-      if (
-        deepState.phase === 'shooting' &&
-        deepState.activeShotPlayer === i &&
-        !deepState.activeShotTouchedBall &&
-        areCirclesTouching(p, deepState.ball)
-      ) {
-        deepState.activeShotTouchedBall = true;
-      }
-      resolveCircleCollision(p, deepState.ball);
-    }
-
-    for (let i = 0; i < deepState.players.length; i++) {
-      for (let j = i + 1; j < deepState.players.length; j++) {
-        if (
-          deepState.phase === 'shooting' &&
-          deepState.activeShotPlayer !== null &&
-          !deepState.activeShotTouchedBall &&
-          !deepState.activeShotCommittedFoul &&
-          (deepState.activeShotPlayer === i || deepState.activeShotPlayer === j)
-        ) {
-          const first = deepState.players[i];
-          const second = deepState.players[j];
-          const shooter = deepState.activeShotPlayer === i ? first : second;
-          const other = deepState.activeShotPlayer === i ? second : first;
-
-          if (shooter.team !== other.team && areCirclesTouching(shooter, other)) {
-            deepState.activeShotCommittedFoul = true;
-            deepState.bonusTurnTeam = other.team;
-            deepState.pendingBonusTurns = 1;
-          }
-        }
-        resolveCircleCollision(deepState.players[i], deepState.players[j]);
-      }
-    }
-
-    if (allStopped) {
-      deepState.phase = 'aiming';
-      if (deepState.pendingBonusTurns > 0 && deepState.bonusTurnTeam === deepState.turn) {
-        deepState.pendingBonusTurns--;
-        if (deepState.pendingBonusTurns <= 0) {
-          deepState.pendingBonusTurns = 0;
-          deepState.bonusTurnTeam = null;
-        }
-      } else {
-        deepState.turn = deepState.turn === 'home' ? 'away' : 'home';
-      }
-      deepState.activeShotPlayer = null;
-      deepState.activeShotTouchedBall = false;
-      deepState.activeShotCommittedFoul = false;
-      break;
-    }
+    const done = simulateStep(deepState);
+    if (done) break;
   }
 
   return deepState;
+}
+
+export function simulateStep(state: MatchState): boolean {
+  let allStopped = true;
+
+  for (const p of state.players) {
+    p.pos.x += p.vel.x * MOVEMENT_SCALE;
+    p.pos.y += p.vel.y * MOVEMENT_SCALE;
+    p.vel.x *= FRICTION;
+    p.vel.y *= FRICTION;
+    if (Math.abs(p.vel.x) < STOP_THRESHOLD) p.vel.x = 0;
+    if (Math.abs(p.vel.y) < STOP_THRESHOLD) p.vel.y = 0;
+    if (Math.abs(p.vel.x) > 0.1 || Math.abs(p.vel.y) > 0.1) allStopped = false;
+
+    if (p.pos.x < p.radius) { p.pos.x = p.radius; p.vel.x = -p.vel.x * 0.6; }
+    if (p.pos.x > FIELD_WIDTH - p.radius) { p.pos.x = FIELD_WIDTH - p.radius; p.vel.x = -p.vel.x * 0.6; }
+    if (p.pos.y < p.radius) { p.pos.y = p.radius; p.vel.y = -p.vel.y * 0.6; }
+    if (p.pos.y > FIELD_HEIGHT - p.radius) { p.pos.y = FIELD_HEIGHT - p.radius; p.vel.y = -p.vel.y * 0.6; }
+  }
+
+  const ball = state.ball;
+  ball.pos.x += ball.vel.x * MOVEMENT_SCALE;
+  ball.pos.y += ball.vel.y * MOVEMENT_SCALE;
+  ball.vel.x *= FRICTION;
+  ball.vel.y *= FRICTION;
+  if (Math.abs(ball.vel.x) < STOP_THRESHOLD) ball.vel.x = 0;
+  if (Math.abs(ball.vel.y) < STOP_THRESHOLD) ball.vel.y = 0;
+  if (Math.abs(ball.vel.x) > 0.1 || Math.abs(ball.vel.y) > 0.1) allStopped = false;
+
+  if (Math.abs(ball.vel.x) > 1 || Math.abs(ball.vel.y) > 1) {
+    ball.trail.push({ x: ball.pos.x, y: ball.pos.y });
+    if (ball.trail.length > 15) ball.trail.shift();
+  } else if (ball.trail.length > 0) {
+    ball.trail.shift();
+  }
+
+  const inHomeGoal = ball.pos.y > state.goals[0].y && ball.pos.y < state.goals[0].y + state.goals[0].height;
+  const inAwayGoal = ball.pos.y > state.goals[1].y && ball.pos.y < state.goals[1].y + state.goals[1].height;
+  const goalsBlockedByFoul = state.activeShotCommittedFoul;
+
+  if (ball.pos.x < ball.radius) {
+    if (!(inHomeGoal && !goalsBlockedByFoul)) { ball.pos.x = ball.radius; ball.vel.x = -ball.vel.x * 0.6; }
+  }
+  if (ball.pos.x > FIELD_WIDTH - ball.radius) {
+    if (!(inAwayGoal && !goalsBlockedByFoul)) { ball.pos.x = FIELD_WIDTH - ball.radius; ball.vel.x = -ball.vel.x * 0.6; }
+  }
+  if (ball.pos.y < ball.radius) { ball.pos.y = ball.radius; ball.vel.y = -ball.vel.y * 0.6; }
+  if (ball.pos.y > FIELD_HEIGHT - ball.radius) { ball.pos.y = FIELD_HEIGHT - ball.radius; ball.vel.y = -ball.vel.y * 0.6; }
+
+  const goalScorer = goalsBlockedByFoul ? null : checkGoal(state);
+  if (goalScorer) {
+    state.score[goalScorer]++;
+    if (state.score[goalScorer] >= WIN_SCORE) {
+      state.winner = goalScorer;
+    }
+    resetPositions(state);
+    return true;
+  }
+
+  for (let i = 0; i < state.players.length; i++) {
+    const p = state.players[i];
+    if (
+      state.phase === 'shooting' &&
+      state.activeShotPlayer === i &&
+      !state.activeShotTouchedBall &&
+      areCirclesTouching(p, state.ball)
+    ) {
+      state.activeShotTouchedBall = true;
+    }
+    resolveCircleCollision(p, state.ball);
+  }
+
+  for (let i = 0; i < state.players.length; i++) {
+    for (let j = i + 1; j < state.players.length; j++) {
+      if (
+        state.phase === 'shooting' &&
+        state.activeShotPlayer !== null &&
+        !state.activeShotTouchedBall &&
+        !state.activeShotCommittedFoul &&
+        (state.activeShotPlayer === i || state.activeShotPlayer === j)
+      ) {
+        const first = state.players[i];
+        const second = state.players[j];
+        const shooter = state.activeShotPlayer === i ? first : second;
+        const other = state.activeShotPlayer === i ? second : first;
+
+        if (shooter.team !== other.team && areCirclesTouching(shooter, other)) {
+          state.activeShotCommittedFoul = true;
+          state.bonusTurnTeam = other.team;
+          state.pendingBonusTurns = 1;
+        }
+      }
+      resolveCircleCollision(state.players[i], state.players[j]);
+    }
+  }
+
+  if (allStopped) {
+    state.phase = 'aiming';
+    if (state.pendingBonusTurns > 0 && state.bonusTurnTeam === state.turn) {
+      state.pendingBonusTurns--;
+      if (state.pendingBonusTurns <= 0) {
+        state.pendingBonusTurns = 0;
+        state.bonusTurnTeam = null;
+      }
+    } else {
+      state.turn = state.turn === 'home' ? 'away' : 'home';
+    }
+    state.activeShotPlayer = null;
+    state.activeShotTouchedBall = false;
+    state.activeShotCommittedFoul = false;
+    return true;
+  }
+
+  return false;
 }

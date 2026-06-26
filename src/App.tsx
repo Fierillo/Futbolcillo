@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Goal, LoaderCircle, Trophy, RotateCcw, Info, X, Volume2, VolumeX } from 'lucide-react';
+import { Goal, LoaderCircle, Swords, Trophy, RotateCcw, Info, X, Volume2, VolumeX } from 'lucide-react';
 import { useChallengeStore } from './challenge/store';
 import TejoCanvas from './game/TejoCanvas';
 import { preparePhaseOneInfrastructure, usePhaseOneBoot } from './app/use-phase-one-boot';
@@ -10,6 +10,8 @@ import {
   handleMouseMove,
   handleMouseUp,
 } from './game/engine';
+import { simulateStep } from './game/physics';
+import type { MatchState } from './game/physics';
 import { GameState, FIELD_WIDTH, FIELD_HEIGHT } from './game/types';
 import { NostrGatewayModal } from './nostr/NostrGatewayModal';
 import { useNostrSession } from './nostr/session-store';
@@ -25,13 +27,15 @@ export default function App() {
   const [linkedChallengeToken, setLinkedChallengeToken] = useState('');
   const [muted, setMuted] = useState(false);
   const [scale, setScale] = useState(1);
+  const [isMobilePortrait, setIsMobilePortrait] = useState(false);
   const gameStateRef = useRef<GameState>(gameState);
+  const previousPhaseRef = useRef<GameState['phase']>(gameState.phase);
   const animFrameRef = useRef<number>(0);
   const containerRef = useRef<HTMLDivElement>(null);
   const { setSyncState } = useSyncStatus();
   const { session, refreshProfile } = useNostrSession();
   const { activeChallenge, pendingIncomingCount } = useChallengeStore();
-  const { activeMatchId, matchState, matchError, isCreatingMatch, createMatch, submitShot, clearMatch } = useMatchStore();
+  const { activeMatchId, matchState, matchError, isCreatingMatch, isAnimatingShot, pendingShotAnimation, createMatch, submitShot, clearMatch, finishShotAnimation } = useMatchStore();
   const localTeam = activeChallenge?.direction === 'incoming' ? 'away' : activeChallenge?.direction === 'outgoing' ? 'home' : null;
 
   usePhaseOneBoot();
@@ -61,17 +65,25 @@ export default function App() {
     gameStateRef.current = gameState;
   }, [gameState]);
 
+  const lastProcessedChallengeRef = useRef<string | null>(null);
+
   useEffect(() => {
     if (!activeChallenge) return;
+    if (lastProcessedChallengeRef.current === activeChallenge.id) return;
+    lastProcessedChallengeRef.current = activeChallenge.id;
 
     setGameState(createInitialState());
-    setShowNostrGateway(false);
     setShowHelp(false);
 
-    if (activeChallenge.state === 'accepted') {
+    if (activeChallenge.state === 'accepted' || activeChallenge.state === 'in_match') {
       void createMatch(activeChallenge);
     }
   }, [activeChallenge, createMatch]);
+
+  useEffect(() => {
+    if (!activeMatchId) return;
+    setShowNostrGateway(false);
+  }, [activeMatchId]);
 
   // Responsive scaling
   useEffect(() => {
@@ -80,6 +92,11 @@ export default function App() {
       const containerWidth = containerRef.current.clientWidth - 32;
       const containerTop = containerRef.current.getBoundingClientRect().top;
       const containerHeight = Math.max(window.innerHeight - containerTop - 24, 240);
+      const isPortrait = window.innerWidth < 640 && window.innerHeight > window.innerWidth;
+      setIsMobilePortrait(isPortrait);
+
+      // Scale is always based on fitting FIELD_WIDTH x FIELD_HEIGHT into the container
+      // The rotation is handled by CSS transform, so visual dimensions are always FIELD_WIDTH * scale x FIELD_HEIGHT * scale
       const scaleX = containerWidth / FIELD_WIDTH;
       const scaleY = containerHeight / FIELD_HEIGHT;
       setScale(Math.min(scaleX, scaleY, 1));
@@ -91,7 +108,7 @@ export default function App() {
 
   // Sync server state to local game state when in online mode
   useEffect(() => {
-    if (!matchState || !activeMatchId) return;
+    if (!matchState || !activeMatchId || isAnimatingShot) return;
 
     setGameState((prev) => {
       const next = { ...prev };
@@ -99,8 +116,8 @@ export default function App() {
         ...p,
         isSelected: false,
         cooldown: 0,
-        color: p.team === 'home' ? '#1e40af' : '#b91c1c',
-        strokeColor: p.team === 'home' ? '#60a5fa' : '#f87171',
+        color: p.team === 'away' ? '#b91c1c' : '#1e40af',
+        strokeColor: p.team === 'away' ? '#f87171' : '#60a5fa',
       }));
       next.ball = {
         ...matchState.ball,
@@ -117,13 +134,35 @@ export default function App() {
       next.activeShotCommittedFoul = matchState.activeShotCommittedFoul;
       next.bonusTurnTeam = matchState.bonusTurnTeam;
       next.pendingBonusTurns = matchState.pendingBonusTurns;
+      next.lastShot = matchState.lastShot;
+      next.lastShotAnimation = matchState.lastShotAnimation;
       return next;
     });
-  }, [matchState, activeMatchId]);
+  }, [matchState, activeMatchId, isAnimatingShot]);
 
-  // Game loop (only runs in training mode)
+  // Detect when shot animation finishes only on a real transition shooting -> aiming.
   useEffect(() => {
-    if (activeMatchId) return;
+    const previousPhase = previousPhaseRef.current;
+    if (
+      isAnimatingShot &&
+      shotInitializedRef.current &&
+      previousPhase === 'shooting' &&
+      gameState.phase === 'aiming'
+    ) {
+      shotInitializedRef.current = false;
+      finishShotAnimation();
+    }
+    previousPhaseRef.current = gameState.phase;
+  }, [gameState.phase, isAnimatingShot, finishShotAnimation]);
+
+  // Game loop (runs in training mode, during online shot animations, and while visual effects are active)
+  const shotInitializedRef = useRef(false);
+
+  useEffect(() => {
+    if (activeMatchId && !isAnimatingShot && gameState.messageTimer <= 0 && gameState.cameraShake <= 0) {
+      shotInitializedRef.current = false;
+      return;
+    }
 
     let lastTime = performance.now();
 
@@ -141,16 +180,84 @@ export default function App() {
         next.dragStart = prev.dragStart ? { ...prev.dragStart } : null;
         next.dragCurrent = prev.dragCurrent ? { ...prev.dragCurrent } : null;
 
-        updateGame(next, dt);
+        if (isAnimatingShot) {
+          if (!shotInitializedRef.current && pendingShotAnimation) {
+            shotInitializedRef.current = true;
+            const anim = pendingShotAnimation;
+            const init = anim.initialState;
+
+            next.players = init.players.map((p) => ({
+              ...p,
+              isSelected: false,
+              cooldown: 0,
+              color: p.team === 'away' ? '#b91c1c' : '#1e40af',
+              strokeColor: p.team === 'away' ? '#f87171' : '#60a5fa',
+            }));
+            next.ball = { ...init.ball, color: '#fbbf24', strokeColor: '#f59e0b' };
+            next.goals = [...init.goals];
+            next.score = { ...init.score };
+            next.turn = init.turn;
+            next.phase = 'shooting';
+            next.winner = init.winner;
+            next.activeShotPlayer = anim.playerIndex;
+            next.activeShotTouchedBall = false;
+            next.activeShotCommittedFoul = false;
+            next.bonusTurnTeam = init.bonusTurnTeam;
+            next.pendingBonusTurns = init.pendingBonusTurns;
+            next.lastShot = init.lastShot;
+            next.lastShotAnimation = init.lastShotAnimation;
+            next.dragStart = null;
+            next.dragCurrent = null;
+            next.selectedPlayer = null;
+
+            const player = next.players[anim.playerIndex];
+            if (player) {
+              next.players[anim.playerIndex] = {
+                ...player,
+                vel: { x: anim.velX, y: anim.velY },
+              };
+            }
+          }
+
+          // Run one physics step (same code as server)
+          const scoreBefore = { ...next.score };
+          const winnerBefore = next.winner;
+          const foulBefore = next.activeShotCommittedFoul;
+          simulateStep(next as unknown as MatchState);
+
+          if (!foulBefore && next.activeShotCommittedFoul) {
+            next.message = '¡Falta! El rival gana dos jugadas.';
+            next.messageTimer = 120;
+            next.cameraShake = 6;
+          }
+
+          if (next.score.home !== scoreBefore.home || next.score.away !== scoreBefore.away) {
+            const goalScorer = next.score.home !== scoreBefore.home ? 'home' : 'away';
+            next.message = `¡GOL DE ${goalScorer === 'home' ? 'LOCAL' : 'RIVAL'}!`;
+            next.messageTimer = 120;
+            next.cameraShake = 12;
+          }
+
+          if (!winnerBefore && next.winner) {
+            next.message = `¡${next.winner === 'home' ? 'LOCAL' : 'RIVAL'} CAMPEÓN!`;
+            next.messageTimer = 120;
+            next.cameraShake = 12;
+          }
+        } else {
+          updateGame(next, dt);
+        }
         return next;
       });
 
-      animFrameRef.current = requestAnimationFrame(loop);
+      const shouldContinue = !activeMatchId || isAnimatingShot || gameStateRef.current.messageTimer > 0 || gameStateRef.current.cameraShake > 0;
+      if (shouldContinue) {
+        animFrameRef.current = requestAnimationFrame(loop);
+      }
     };
 
     animFrameRef.current = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(animFrameRef.current);
-  }, [activeMatchId]);
+  }, [activeMatchId, isAnimatingShot]);
 
   const onMouseDown = useCallback((x: number, y: number) => {
     if (activeChallenge && gameStateRef.current.turn !== localTeam) return;
@@ -214,8 +321,23 @@ export default function App() {
           const velY = (dy / length) * clampedPower;
           const playerIndex = next.players.findIndex((p) => p.team === selectedPlayer.team && p.number === selectedPlayer.number);
           if (playerIndex !== -1) {
+            // Apply shot locally for immediate animation feedback
+            // Uses same physics as server (simulateStep) so result should match
+            shotInitializedRef.current = true;
+            next.players[playerIndex] = { ...next.players[playerIndex], vel: { x: velX, y: velY } };
+            next.phase = 'shooting';
+            next.activeShotPlayer = playerIndex;
+            next.activeShotTouchedBall = false;
+            next.activeShotCommittedFoul = false;
+            next.selectedPlayer = null;
+            next.dragStart = null;
+            next.dragCurrent = null;
             void submitShot(playerIndex, velX, velY);
           }
+        } else {
+          next.selectedPlayer = null;
+          next.dragStart = null;
+          next.dragCurrent = null;
         }
       } else {
         handleMouseUp(next);
@@ -248,34 +370,70 @@ export default function App() {
     }
   };
 
-  const turnText = gameState.turn === 'home' ? 'LOCAL' : 'RIVAL';
-  const turnColor = gameState.turn === 'home' ? 'text-blue-400' : 'text-red-400';
-  const phaseText = gameState.phase === 'aiming' ? 'Apuntá y pateá' : 'En juego...';
   const shortenPubkey = (value: string) => {
     if (!value) return '';
     if (value.length <= 16) return value;
     return `${value.slice(0, 8)}...${value.slice(-6)}`;
   };
-  const homeIdentity = session.profile;
-  const awayIdentity = {
-    name: activeChallenge?.rivalName || 'Máquina',
-    pubkey: activeChallenge?.rivalPubkey || 'training-bot',
-    avatarUrl: `https://api.dicebear.com/9.x/bottts/svg?seed=${activeChallenge?.rivalPubkey || 'training-bot'}`,
-  };
+
+  const homeAlias = activeChallenge?.direction === 'outgoing'
+    ? session.profile?.name || 'Local'
+    : activeChallenge?.direction === 'incoming'
+      ? activeChallenge.rivalName || 'Rival'
+      : 'Local';
+  const awayAlias = activeChallenge?.direction === 'outgoing'
+    ? activeChallenge.rivalName || 'Rival'
+    : activeChallenge?.direction === 'incoming'
+      ? session.profile?.name || 'Local'
+      : 'Máquina';
+
+  const turnText = activeChallenge
+    ? gameState.turn === 'home'
+      ? homeAlias.toUpperCase()
+      : awayAlias.toUpperCase()
+    : gameState.turn === 'home'
+      ? 'LOCAL'
+      : 'RIVAL';
+  const turnColor = gameState.turn === 'home' ? 'text-blue-400' : 'text-red-400';
+  const phaseText = gameState.phase === 'aiming' ? 'Apuntá y pateá' : 'En juego...';
+
+  const homeIdentity = activeChallenge
+    ? {
+        name: homeAlias,
+        pubkey: activeChallenge.direction === 'outgoing' ? session.profile?.pubkey || '' : activeChallenge.rivalPubkey,
+        avatarUrl: activeChallenge.direction === 'outgoing'
+          ? session.profile?.avatarUrl || `https://api.dicebear.com/9.x/shapes/svg?seed=${session.profile?.pubkey || 'local'}`
+          : `https://api.dicebear.com/9.x/bottts/svg?seed=${activeChallenge.rivalPubkey}`,
+      }
+    : session.profile;
+
+  const awayIdentity = activeChallenge
+    ? {
+        name: awayAlias,
+        pubkey: activeChallenge.direction === 'outgoing' ? activeChallenge.rivalPubkey : session.profile?.pubkey || '',
+        avatarUrl: activeChallenge.direction === 'outgoing'
+          ? `https://api.dicebear.com/9.x/bottts/svg?seed=${activeChallenge.rivalPubkey}`
+          : session.profile?.avatarUrl || `https://api.dicebear.com/9.x/shapes/svg?seed=${session.profile?.pubkey || 'away'}`,
+      }
+    : {
+        name: 'Máquina',
+        pubkey: 'training-bot',
+        avatarUrl: 'https://api.dicebear.com/9.x/bottts/svg?seed=training-bot',
+      };
 
   return (
     <div className="min-h-screen bg-stone-900 text-white flex flex-col items-center select-none">
       {/* Header */}
-      <header className="w-full max-w-5xl px-4 py-4 flex items-center justify-between">
-        <div>
-          <h1 className="title-font text-4xl leading-none tracking-[0.14em] text-amber-400 uppercase drop-shadow-[0_2px_0_rgba(0,0,0,0.35)] sm:text-5xl">
+      <header className={`w-full max-w-5xl px-4 ${isMobilePortrait ? 'py-2 flex flex-col gap-2' : 'py-4 flex items-center justify-between'}`}>
+        <div className={isMobilePortrait ? 'flex items-center justify-between' : ''}>
+          <h1 className={`title-font text-amber-400 uppercase drop-shadow-[0_2px_0_rgba(0,0,0,0.35)] ${isMobilePortrait ? 'text-2xl leading-none tracking-[0.1em]' : 'text-4xl leading-none tracking-[0.14em] sm:text-5xl'}`}>
             Futbolcillo
           </h1>
-          <p className="mt-1 text-xs uppercase tracking-[0.25em] text-stone-500">
+          <p className={`${isMobilePortrait ? 'text-[10px] uppercase tracking-[0.15em] text-stone-500' : 'mt-1 text-xs uppercase tracking-[0.25em] text-stone-500'}`}>
             {isCreatingMatch
               ? 'Creando partida...'
               : activeMatchId
-                ? `Partida online • ${matchState?.turn === localTeam ? 'Tu turno' : 'Turno del rival'}`
+                ? `Turno de ${turnText.toLowerCase()}`
                 : activeChallenge
                   ? activeChallenge.mode === 'wager'
                     ? `Partida en juego: ${activeChallenge.amountSats} sats`
@@ -286,14 +444,14 @@ export default function App() {
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className={`flex items-center gap-2 ${isMobilePortrait ? 'flex-wrap justify-center' : ''}`}>
           <GlobalSyncStatus onRetry={retrySync} />
           <button
             onClick={() => setShowNostrGateway(true)}
-            className="relative flex items-center gap-2 rounded-lg bg-emerald-700 px-3 py-2 text-sm font-bold uppercase tracking-wider text-white transition-colors hover:bg-emerald-600"
+            className={`relative flex items-center gap-2 rounded-lg bg-emerald-700 text-sm font-bold uppercase tracking-wider text-white transition-colors hover:bg-emerald-600 ${isMobilePortrait ? 'px-2 py-1.5 text-xs' : 'px-3 py-2'}`}
           >
-            <Goal size={16} />
-            Quiero Más
+            {session.status === 'connected' ? <Swords size={14} /> : <Goal size={14} />}
+            {session.status === 'connected' ? 'Desafíos' : 'Quiero Más'}
             {pendingIncomingCount > 0 && (
               <span className="absolute -right-1.5 -top-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-red-500 text-[10px] font-bold text-white">
                 {pendingIncomingCount}
@@ -302,70 +460,75 @@ export default function App() {
           </button>
           <button
             onClick={() => setMuted(!muted)}
-            className="p-2 rounded-lg bg-stone-800 hover:bg-stone-700 transition-colors"
+            className={`rounded-lg bg-stone-800 hover:bg-stone-700 transition-colors ${isMobilePortrait ? 'p-1.5' : 'p-2'}`}
           >
-            {muted ? <VolumeX size={18} /> : <Volume2 size={18} />}
+            {muted ? <VolumeX size={16} /> : <Volume2 size={16} />}
           </button>
           <button
             onClick={() => setShowHelp(true)}
-            className="p-2 rounded-lg bg-stone-800 hover:bg-stone-700 transition-colors"
+            className={`rounded-lg bg-stone-800 hover:bg-stone-700 transition-colors ${isMobilePortrait ? 'p-1.5' : 'p-2'}`}
           >
-            <Info size={18} />
+            <Info size={16} />
           </button>
           <button
             onClick={resetGame}
-            className="p-2 rounded-lg bg-stone-800 hover:bg-stone-700 transition-colors"
+            className={`rounded-lg bg-stone-800 hover:bg-stone-700 transition-colors ${isMobilePortrait ? 'p-1.5' : 'p-2'}`}
           >
-            <RotateCcw size={18} />
+            <RotateCcw size={16} />
           </button>
         </div>
       </header>
 
       {/* Scoreboard */}
-      <div className="w-full max-w-5xl px-4 mb-3">
-        <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-3 rounded-xl bg-stone-800 p-4 shadow-lg">
-          <div className="flex min-w-0 items-center gap-3 justify-self-start">
+      <div className={`w-full max-w-5xl px-4 ${isMobilePortrait ? 'mb-2' : 'mb-3'}`}>
+        <div className={`grid items-center gap-3 rounded-xl bg-stone-800 shadow-lg ${isMobilePortrait ? 'grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] p-2' : 'grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] p-4'}`}>
+          <div className={`flex min-w-0 items-center justify-self-start ${isMobilePortrait ? 'gap-2' : 'gap-3'}`}>
+            <img
+              src={awayIdentity?.avatarUrl || 'https://api.dicebear.com/9.x/bottts/svg?seed=training-bot'}
+              alt={awayIdentity?.name || 'Visitante'}
+              className={`rounded-full border border-red-500/40 bg-red-950 object-cover shadow-md ${isMobilePortrait ? 'w-8 h-8' : 'w-12 h-12'}`}
+            />
+            <div className="min-w-0">
+              <p className={`truncate font-bold uppercase tracking-wider text-stone-100 ${isMobilePortrait ? 'text-xs' : 'text-sm'}`}>{awayIdentity?.name || 'Visitante'}</p>
+              <p className={`truncate uppercase text-stone-500 ${isMobilePortrait ? 'text-[8px] tracking-[0.15em]' : 'text-[10px] tracking-[0.2em]'}`}>{shortenPubkey(awayIdentity?.pubkey || '')}</p>
+            </div>
+            <div className={`rounded-lg bg-stone-900/60 ${isMobilePortrait ? 'px-2 py-0.5' : 'px-3 py-1'}`}>
+              <p className={`font-bold leading-none text-red-400 ${isMobilePortrait ? 'text-xl' : 'text-3xl'}`}>{gameState.score.away}</p>
+            </div>
+          </div>
+
+          <div className={`text-center ${isMobilePortrait ? 'min-w-[80px] px-1' : 'min-w-[140px] px-2'}`}>
+            <p className={`mb-1 uppercase tracking-[0.3em] text-stone-500 ${isMobilePortrait ? 'text-[8px]' : 'text-[10px]'}`}>Turno</p>
+            <p className={`font-bold uppercase tracking-widest ${turnColor} ${isMobilePortrait ? 'text-xs' : 'text-base'}`}>{turnText}</p>
+            <p className={`mt-1 text-stone-500 ${isMobilePortrait ? 'text-[10px]' : 'text-xs'}`}>{phaseText}</p>
+          </div>
+
+          <div className={`flex min-w-0 items-center justify-self-end ${isMobilePortrait ? 'gap-2' : 'gap-3'}`}>
+            <div className={`rounded-lg bg-stone-900/60 ${isMobilePortrait ? 'px-2 py-0.5' : 'px-3 py-1'}`}>
+              <p className={`font-bold leading-none text-blue-400 ${isMobilePortrait ? 'text-xl' : 'text-3xl'}`}>{gameState.score.home}</p>
+            </div>
+            <div className="min-w-0 text-right">
+              <p className={`truncate font-bold uppercase tracking-wider text-stone-100 ${isMobilePortrait ? 'text-xs' : 'text-sm'}`}>{homeIdentity?.name || 'Local'}</p>
+              <p className={`truncate uppercase text-stone-500 ${isMobilePortrait ? 'text-[8px] tracking-[0.15em]' : 'text-[10px] tracking-[0.2em]'}`}>{shortenPubkey(homeIdentity?.pubkey || '')}</p>
+            </div>
             <img
               src={homeIdentity?.avatarUrl || 'https://api.dicebear.com/9.x/shapes/svg?seed=local-player'}
               alt={homeIdentity?.name || 'Local'}
-              className="w-12 h-12 rounded-full border border-blue-500/40 bg-blue-950 object-cover shadow-md"
+              className={`rounded-full border border-blue-500/40 bg-blue-950 object-cover shadow-md ${isMobilePortrait ? 'w-8 h-8' : 'w-12 h-12'}`}
             />
-            <div className="min-w-0">
-              <p className="truncate text-sm font-bold uppercase tracking-wider text-stone-100">{homeIdentity?.name || 'Local'}</p>
-              <p className="truncate text-[10px] uppercase tracking-[0.2em] text-stone-500">{shortenPubkey(homeIdentity?.pubkey || 'Sin login')}</p>
-            </div>
-            <div className="rounded-lg bg-stone-900/60 px-3 py-1">
-              <p className="text-3xl font-bold leading-none text-blue-400">{gameState.score.home}</p>
-            </div>
-          </div>
-
-          <div className="min-w-[140px] text-center px-2">
-            <p className="mb-1 text-[10px] uppercase tracking-[0.3em] text-stone-500">Turno</p>
-            <p className={`text-base font-bold uppercase tracking-widest ${turnColor}`}>{turnText}</p>
-            <p className="mt-1 text-xs text-stone-500">{phaseText}</p>
-          </div>
-
-          <div className="flex min-w-0 items-center justify-self-end gap-3">
-            <div className="rounded-lg bg-stone-900/60 px-3 py-1">
-              <p className="text-3xl font-bold leading-none text-red-400">{gameState.score.away}</p>
-            </div>
-            <div className="min-w-0 text-right">
-              <p className="truncate text-sm font-bold uppercase tracking-wider text-stone-100">{awayIdentity.name}</p>
-              <p className="truncate text-[10px] uppercase tracking-[0.2em] text-stone-500">{shortenPubkey(awayIdentity.pubkey)}</p>
-            </div>
-            <img src={awayIdentity.avatarUrl} alt={awayIdentity.name} className="w-12 h-12 rounded-full border border-red-500/40 bg-red-950 object-cover shadow-md" />
           </div>
         </div>
       </div>
 
       {/* Game Canvas */}
-      <div ref={containerRef} className="flex-1 flex items-center justify-center w-full max-w-5xl px-4 pb-4">
+      <div ref={containerRef} className={`flex-1 flex items-center justify-center w-full max-w-5xl ${isMobilePortrait ? 'px-2 pb-2' : 'px-4 pb-4'}`}>
         <TejoCanvas
           gameState={gameState}
           onMouseDown={onMouseDown}
           onMouseMove={onMouseMove}
           onMouseUp={onMouseUp}
           scale={scale}
+          isRotated={isMobilePortrait}
         />
       </div>
 
@@ -373,6 +536,8 @@ export default function App() {
         <NostrGatewayModal
           linkedChallengeId={linkedChallengeId}
           linkedChallengeToken={linkedChallengeToken}
+          matchError={matchError}
+          isCreatingMatch={isCreatingMatch}
           onClose={() => setShowNostrGateway(false)}
         />
       )}

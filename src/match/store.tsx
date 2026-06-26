@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
-import type { MatchState } from '../game/physics';
+import type { MatchState, ShotAnimation } from '../game/physics';
 import type { CachedChallenge } from '../challenge/types';
 
 type ActiveMatch = {
@@ -15,10 +15,13 @@ interface MatchContextValue {
   matchState: MatchState | null;
   matchError: string;
   isCreatingMatch: boolean;
+  isAnimatingShot: boolean;
+  pendingShotAnimation: ShotAnimation | null;
   createMatch: (challenge: CachedChallenge) => Promise<void>;
   submitShot: (playerIndex: number, velX: number, velY: number) => Promise<void>;
   clearMatch: () => void;
   refreshMatchState: () => Promise<void>;
+  finishShotAnimation: () => void;
 }
 
 const MatchContext = createContext<MatchContextValue | null>(null);
@@ -29,13 +32,27 @@ export function MatchProvider({ children }: { children: ReactNode }) {
   const [matchState, setMatchState] = useState<MatchState | null>(null);
   const [matchError, setMatchError] = useState('');
   const [isCreatingMatch, setIsCreatingMatch] = useState(false);
+  const [isAnimatingShot, setIsAnimatingShot] = useState(false);
+  const [pendingShotAnimation, setPendingShotAnimation] = useState<ShotAnimation | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const creatingForChallengeRef = useRef<string | null>(null);
+  const matchStateRef = useRef<MatchState | null>(null);
+  const lastSeenShotIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    matchStateRef.current = matchState;
+  }, [matchState]);
 
   const clearMatch = useCallback(() => {
     setActiveMatchId(null);
     setActiveMatchMeta(null);
     setMatchState(null);
+    matchStateRef.current = null;
     setMatchError('');
+    setIsAnimatingShot(false);
+    setPendingShotAnimation(null);
+    lastSeenShotIdRef.current = null;
+    creatingForChallengeRef.current = null;
     if (pollRef.current) {
       clearInterval(pollRef.current);
       pollRef.current = null;
@@ -61,7 +78,10 @@ export function MatchProvider({ children }: { children: ReactNode }) {
     const match = await fetchMatchState(activeMatchId);
     if (match) {
       setActiveMatchMeta(match);
-      setMatchState(match.state);
+      setMatchState((prev) => {
+        if (prev && JSON.stringify(prev) === JSON.stringify(match.state)) return prev;
+        return match.state;
+      });
       if (match.status === 'finished') {
         if (pollRef.current) {
           clearInterval(pollRef.current);
@@ -71,18 +91,41 @@ export function MatchProvider({ children }: { children: ReactNode }) {
     }
   }, [activeMatchId, fetchMatchState]);
 
+  const finishShotAnimation = useCallback(() => {
+    setPendingShotAnimation(null);
+    setIsAnimatingShot(false);
+  }, []);
+
   useEffect(() => {
     if (!activeMatchId) return;
 
     const poll = async () => {
       const match = await fetchMatchState(activeMatchId);
-      if (match) {
-        setActiveMatchMeta(match);
+      if (!match) return;
+
+      setActiveMatchMeta(match);
+
+      const anim = match.state.lastShotAnimation;
+      const shotId = anim
+        ? `${anim.playerIndex}_${anim.velX}_${anim.velY}_${JSON.stringify(anim.initialState.players[0].pos)}`
+        : null;
+
+      if (anim && shotId && shotId !== lastSeenShotIdRef.current && !isAnimatingShot) {
+        lastSeenShotIdRef.current = shotId;
+        setPendingShotAnimation(anim);
+        setIsAnimatingShot(true);
+        // Also update matchState so sync effect has correct state after animation
         setMatchState(match.state);
-        if (match.status === 'finished' && pollRef.current) {
-          clearInterval(pollRef.current);
-          pollRef.current = null;
-        }
+      } else if (!isAnimatingShot) {
+        setMatchState((prev) => {
+          if (prev && JSON.stringify(prev) === JSON.stringify(match.state)) return prev;
+          return match.state;
+        });
+      }
+
+      if (match.status === 'finished' && pollRef.current) {
+        clearInterval(pollRef.current);
+        pollRef.current = null;
       }
     };
 
@@ -93,9 +136,12 @@ export function MatchProvider({ children }: { children: ReactNode }) {
         pollRef.current = null;
       }
     };
-  }, [activeMatchId, fetchMatchState]);
+  }, [activeMatchId, fetchMatchState, isAnimatingShot]);
 
   const createMatch = useCallback(async (challenge: CachedChallenge) => {
+    if (creatingForChallengeRef.current === challenge.id) return;
+    creatingForChallengeRef.current = challenge.id;
+
     setIsCreatingMatch(true);
     setMatchError('');
 
@@ -109,6 +155,7 @@ export function MatchProvider({ children }: { children: ReactNode }) {
           homePubkey: challenge.direction === 'outgoing' ? challenge.ownerPubkey : challenge.rivalPubkey,
           awayPubkey: challenge.direction === 'outgoing' ? challenge.rivalPubkey : challenge.ownerPubkey,
           mode: challenge.mode,
+          amountSats: challenge.amountSats,
         }),
       });
 
@@ -116,6 +163,7 @@ export function MatchProvider({ children }: { children: ReactNode }) {
 
       if (!res.ok || !data.ok || !data.matchId) {
         setMatchError(data.error || 'No se pudo crear la partida.');
+        creatingForChallengeRef.current = null;
         return;
       }
 
@@ -127,15 +175,20 @@ export function MatchProvider({ children }: { children: ReactNode }) {
       }
     } catch {
       setMatchError('No se pudo conectar con el servidor.');
+      creatingForChallengeRef.current = null;
     } finally {
       setIsCreatingMatch(false);
     }
   }, [fetchMatchState]);
 
   const submitShot = useCallback(async (playerIndex: number, velX: number, velY: number) => {
-    if (!activeMatchId || !matchState || !activeMatchMeta) return;
+    const currentMatchState = matchStateRef.current;
+    if (!activeMatchId || !currentMatchState || !activeMatchMeta) return;
 
-    const actingPubkey = matchState.turn === 'home' ? activeMatchMeta.homePubkey : activeMatchMeta.awayPubkey;
+    // Start animation immediately (game loop will run simulateStep on current state)
+    setIsAnimatingShot(true);
+
+    const actingPubkey = currentMatchState.turn === 'home' ? activeMatchMeta.homePubkey : activeMatchMeta.awayPubkey;
 
     try {
       const res = await fetch('/api/matches/shot', {
@@ -153,27 +206,44 @@ export function MatchProvider({ children }: { children: ReactNode }) {
       const data = await res.json() as { ok: boolean; state?: MatchState; error?: string };
 
       if (!res.ok || !data.ok) {
-        setMatchError(data.error || 'No se pudo enviar el tiro.');
+        if (res.status === 409) {
+          await refreshMatchState();
+          setMatchError(data.error || 'Turno desincronizado, estado actualizado.');
+        } else {
+          setMatchError(data.error || 'No se pudo enviar el tiro.');
+        }
+        setIsAnimatingShot(false);
         return;
       }
 
       if (data.state) {
+        // Store server state for sync after animation
         setMatchState(data.state);
+        // Mark this shot as seen so polling doesn't re-detect it
+        const anim = data.state.lastShotAnimation;
+        if (anim) {
+          lastSeenShotIdRef.current = `${anim.playerIndex}_${anim.velX}_${anim.velY}_${JSON.stringify(anim.initialState.players[0].pos)}`;
+        }
+        // Don't set pendingShotAnimation - animation already running locally
       }
     } catch {
       setMatchError('No se pudo conectar con el servidor.');
+      setIsAnimatingShot(false);
     }
-  }, [activeMatchId, matchState, activeMatchMeta]);
+  }, [activeMatchId, activeMatchMeta, refreshMatchState]);
 
   const value = {
     activeMatchId,
     matchState,
     matchError,
     isCreatingMatch,
+    isAnimatingShot,
+    pendingShotAnimation,
     createMatch,
     submitShot,
     clearMatch,
     refreshMatchState,
+    finishShotAnimation,
   };
 
   return <MatchContext.Provider value={value}>{children}</MatchContext.Provider>;

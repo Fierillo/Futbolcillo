@@ -35,6 +35,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return;
     }
 
+    if (!match.current_state) {
+      res.status(500).json({ ok: false, error: 'Match state is null' });
+      return;
+    }
+
+    let state: unknown;
+    try {
+      state = JSON.parse(match.current_state);
+    } catch {
+      res.status(500).json({ ok: false, error: 'Corrupted match state' });
+      return;
+    }
+
     res.status(200).json({
       ok: true,
       match: {
@@ -42,7 +55,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         status: match.status,
         homePubkey: match.home_pubkey,
         awayPubkey: match.away_pubkey,
-        state: JSON.parse(match.current_state),
+        state,
         updatedAt: match.updated_at,
       },
     });

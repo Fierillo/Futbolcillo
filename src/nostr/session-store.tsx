@@ -9,11 +9,14 @@ interface NostrSessionContextValue {
   session: NostrSessionState;
   connectNip07: () => Promise<void>;
   connectBunker: (token: string) => Promise<void>;
+  startBunkerQr: () => Promise<{ uri: string; relay: string }>;
+  finishBunkerQr: () => Promise<void>;
   disconnect: () => void;
   refreshProfile: () => Promise<void>;
 }
 
 const STORAGE_KEY = 'futbolcillo.nostr-session';
+const NOSTR_CONNECT_RELAY = 'wss://relay.nsec.app';
 
 const defaultSession: NostrSessionState = {
   status: 'disconnected',
@@ -93,10 +96,24 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number) {
   ]);
 }
 
+async function waitForNostrSigner(timeoutMs = 3000) {
+  if (typeof window === 'undefined') return false;
+  if (window.nostr && typeof window.nostr.signEvent === 'function') return true;
+
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (window.nostr && typeof window.nostr.signEvent === 'function') return true;
+    await new Promise((resolve) => window.setTimeout(resolve, 100));
+  }
+
+  return false;
+}
+
 export function NostrSessionProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<NostrSessionState>(defaultSession);
+  const [pendingBunkerSigner, setPendingBunkerSigner] = useState<NDKNip46Signer | null>(null);
 
-  const setConnectedSession = useCallback(async (pubkey: string, method: NostrConnectionMethod, ndk: NDK) => {
+  const setConnectedSession = useCallback(async (pubkey: string, method: NostrConnectionMethod, ndk: NDK, signerPayload?: string) => {
     const profile = await resolveProfile(pubkey, ndk);
 
     const nextSession: NostrSessionState = {
@@ -107,7 +124,11 @@ export function NostrSessionProvider({ children }: { children: ReactNode }) {
       error: '',
     };
 
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ pubkey, method }));
+    const persistedSession = signerPayload
+      ? { pubkey, method, signerPayload }
+      : { pubkey, method };
+
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(persistedSession));
     setSession(nextSession);
   }, []);
 
@@ -116,7 +137,8 @@ export function NostrSessionProvider({ children }: { children: ReactNode }) {
 
     if (method === 'nip07') {
       if (ndk.signer) return true;
-      if (typeof window === 'undefined' || !window.nostr) return false;
+      const ok = await waitForNostrSigner(3000);
+      if (!ok || typeof window === 'undefined' || !window.nostr) return false;
       ndk.signer = new NDKNip07Signer();
       return true;
     }
@@ -126,9 +148,17 @@ export function NostrSessionProvider({ children }: { children: ReactNode }) {
       const raw = localStorage.getItem(STORAGE_KEY);
       if (!raw) return false;
       try {
-        const parsed = JSON.parse(raw) as { pubkey: string; method: NostrConnectionMethod; bunkerToken?: string };
-        if (!parsed.bunkerToken) return false;
-        const signer = NDKNip46Signer.bunker(ndk, parsed.bunkerToken);
+        const parsed = JSON.parse(raw) as { pubkey: string; method: NostrConnectionMethod; signerPayload?: string; bunkerToken?: string };
+        let signer: NDKNip46Signer;
+
+        if (parsed.signerPayload) {
+          signer = await NDKNip46Signer.fromPayload(parsed.signerPayload, ndk);
+        } else if (parsed.bunkerToken) {
+          signer = NDKNip46Signer.bunker(ndk, parsed.bunkerToken);
+        } else {
+          return false;
+        }
+
         ndk.signer = signer;
         return true;
       } catch {
@@ -194,6 +224,11 @@ export function NostrSessionProvider({ children }: { children: ReactNode }) {
 
     try {
       const ndk = getNostrClient();
+      const ok = await waitForNostrSigner(3000);
+      if (!ok) {
+        throw new Error('No se detectó una extensión Nostr compatible.');
+      }
+
       const signer = new NDKNip07Signer();
       ndk.signer = signer;
       const user = await signer.user();
@@ -217,14 +252,8 @@ export function NostrSessionProvider({ children }: { children: ReactNode }) {
       const signer = NDKNip46Signer.bunker(ndk, token);
       ndk.signer = signer;
       const user = await withTimeout(signer.user(), 12000);
-      await setConnectedSession(user.pubkey, 'bunker', ndk);
-
-      const raw = localStorage.getItem(STORAGE_KEY);
-      if (raw) {
-        const parsed = JSON.parse(raw) as Record<string, unknown>;
-        parsed.bunkerToken = token;
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(parsed));
-      }
+      const signerPayload = signer.toPayload();
+      await setConnectedSession(user.pubkey, 'bunker', ndk, signerPayload);
     } catch (error) {
       setSession({
         status: 'error',
@@ -236,8 +265,38 @@ export function NostrSessionProvider({ children }: { children: ReactNode }) {
     }
   }, [setConnectedSession]);
 
+  const startBunkerQr = useCallback(async () => {
+    const ndk = getNostrClient();
+    const signer = NDKNip46Signer.nostrconnect(ndk, NOSTR_CONNECT_RELAY);
+    ndk.signer = signer;
+    setPendingBunkerSigner(signer);
+
+    if (!signer.nostrConnectUri) {
+      throw new Error('No se pudo generar el enlace nostrconnect.');
+    }
+
+    return {
+      uri: signer.nostrConnectUri,
+      relay: NOSTR_CONNECT_RELAY,
+    };
+  }, []);
+
+  const finishBunkerQr = useCallback(async () => {
+    if (!pendingBunkerSigner) {
+      throw new Error('No hay una sesión QR pendiente.');
+    }
+
+    const ndk = getNostrClient();
+    ndk.signer = pendingBunkerSigner;
+    const user = await withTimeout(pendingBunkerSigner.user(), 180000);
+    const signerPayload = pendingBunkerSigner.toPayload();
+    await setConnectedSession(user.pubkey, 'bunker', ndk, signerPayload);
+    setPendingBunkerSigner(null);
+  }, [pendingBunkerSigner, setConnectedSession]);
+
   const disconnect = useCallback(() => {
     localStorage.removeItem(STORAGE_KEY);
+    setPendingBunkerSigner(null);
     setSession(defaultSession);
   }, []);
 
@@ -256,8 +315,8 @@ export function NostrSessionProvider({ children }: { children: ReactNode }) {
   }, [session.pubkey]);
 
   const value = useMemo(
-    () => ({ session, connectNip07, connectBunker, disconnect, refreshProfile }),
-    [session, connectNip07, connectBunker, disconnect, refreshProfile]
+    () => ({ session, connectNip07, connectBunker, startBunkerQr, finishBunkerQr, disconnect, refreshProfile }),
+    [session, connectNip07, connectBunker, startBunkerQr, finishBunkerQr, disconnect, refreshProfile]
   );
 
   return <NostrSessionContext.Provider value={value}>{children}</NostrSessionContext.Provider>;

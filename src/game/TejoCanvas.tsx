@@ -7,9 +7,10 @@ interface Props {
   onMouseMove: (x: number, y: number) => void;
   onMouseUp: () => void;
   scale: number;
+  isRotated?: boolean;
 }
 
-export default function TejoCanvas({ gameState, onMouseDown, onMouseMove, onMouseUp, scale }: Props) {
+export default function TejoCanvas({ gameState, onMouseDown, onMouseMove, onMouseUp, scale, isRotated = false }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   const draw = useCallback(() => {
@@ -283,17 +284,28 @@ export default function TejoCanvas({ gameState, onMouseDown, onMouseMove, onMous
     const rect = canvasRef.current?.getBoundingClientRect();
     if (!rect) return;
     canvasRef.current?.setPointerCapture(e.pointerId);
-    const x = (e.clientX - rect.left) / scale;
-    const y = (e.clientY - rect.top) / scale;
-    onMouseDown(x, y);
+    const rawX = (e.clientX - rect.left) / scale;
+    const rawY = (e.clientY - rect.top) / scale;
+
+    if (isRotated) {
+      // Rotated 90° clockwise: logicalX = rawY, logicalY = FIELD_HEIGHT - rawX
+      onMouseDown(rawY, FIELD_HEIGHT - rawX);
+    } else {
+      onMouseDown(rawX, rawY);
+    }
   };
 
   const handlePointerMove = (e: React.PointerEvent) => {
     const rect = canvasRef.current?.getBoundingClientRect();
     if (!rect) return;
-    const x = (e.clientX - rect.left) / scale;
-    const y = (e.clientY - rect.top) / scale;
-    onMouseMove(x, y);
+    const rawX = (e.clientX - rect.left) / scale;
+    const rawY = (e.clientY - rect.top) / scale;
+
+    if (isRotated) {
+      onMouseMove(rawY, FIELD_HEIGHT - rawX);
+    } else {
+      onMouseMove(rawX, rawY);
+    }
   };
 
   const handlePointerUp = (e: React.PointerEvent) => {
@@ -321,6 +333,7 @@ export default function TejoCanvas({ gameState, onMouseDown, onMouseMove, onMous
       style={{
         width: FIELD_WIDTH * scale,
         height: FIELD_HEIGHT * scale,
+        transform: isRotated ? 'rotate(90deg)' : 'none',
         touchAction: 'none',
         cursor: gameState.phase === 'aiming' ? 'crosshair' : 'default',
       }}

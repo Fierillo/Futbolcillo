@@ -11,6 +11,8 @@ interface Props {
   onClose: () => void;
   linkedChallengeId?: string;
   linkedChallengeToken?: string;
+  matchError?: string;
+  isCreatingMatch?: boolean;
 }
 
 const features: NostrFeatureCard[] = [
@@ -30,18 +32,20 @@ const features: NostrFeatureCard[] = [
 
 type ModalStep = 'intro' | 'connect' | 'received' | 'invite';
 
-export function NostrGatewayModal({ onClose, linkedChallengeId = '', linkedChallengeToken = '' }: Props) {
+export function NostrGatewayModal({ onClose, linkedChallengeId = '', linkedChallengeToken = '', matchError = '', isCreatingMatch = false }: Props) {
   const hasLinkedChallenge = Boolean(linkedChallengeId && linkedChallengeToken);
   const [bunkerToken, setBunkerToken] = useState('');
   const [showQr, setShowQr] = useState(false);
   const [showTechnicalNotes, setShowTechnicalNotes] = useState(false);
+  const [qrUri, setQrUri] = useState('');
+  const [qrLoading, setQrLoading] = useState(false);
   const [step, setStep] = useState<ModalStep>(hasLinkedChallenge ? 'connect' : 'intro');
-  const { session, connectNip07, connectBunker, disconnect, refreshProfile } = useNostrSession();
+  const { session, connectNip07, connectBunker, startBunkerQr, finishBunkerQr, disconnect, refreshProfile } = useNostrSession();
   const { linkedChallenge, loadLinkedChallenge, acceptLinkedChallenge, rejectLinkedChallenge } = useChallengeStore();
   const relays = getRelayList();
   const isBusy = session.status === 'connecting';
-  const bunkerQrUrl = bunkerToken.trim()
-    ? `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(bunkerToken.trim())}`
+  const bunkerQrUrl = qrUri
+    ? `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(qrUri)}`
     : '';
 
   const activeStep =
@@ -75,39 +79,61 @@ export function NostrGatewayModal({ onClose, linkedChallengeId = '', linkedChall
     void loadLinkedChallenge(linkedChallengeId, linkedChallengeToken);
   }, [session.status, linkedChallengeId, linkedChallengeToken, loadLinkedChallenge]);
 
+  const handleCreateQr = async () => {
+    setQrLoading(true);
+    try {
+      const { uri } = await startBunkerQr();
+      setQrUri(uri);
+      setShowQr(true);
+    } finally {
+      setQrLoading(false);
+    }
+  };
+
+  const handleFinishQr = async () => {
+    setQrLoading(true);
+    try {
+      await finishBunkerQr();
+      setShowQr(false);
+      setQrUri('');
+    } finally {
+      setQrLoading(false);
+    }
+  };
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 px-4">
-      <div className="max-h-[calc(100vh-2rem)] w-full max-w-2xl overflow-y-auto rounded-3xl border border-stone-700 bg-stone-900 p-4 shadow-2xl sm:p-5">
-        <div className="mb-4 flex items-start justify-between gap-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 px-2 sm:px-4">
+      <div className="max-h-[calc(100vh-1rem)] w-full max-w-2xl overflow-y-auto rounded-2xl sm:rounded-3xl border border-stone-700 bg-stone-900 p-3 sm:p-4 shadow-2xl">
+        <div className="mb-3 sm:mb-4 flex items-start justify-between gap-3 sm:gap-4">
           <div className="min-w-0">
-            <p className="mb-1 text-[11px] font-semibold uppercase tracking-[0.25em] text-emerald-400">Quiero Más</p>
-            <h2 className="title-font text-3xl uppercase tracking-[0.12em] text-amber-400 sm:text-4xl">Modo Nostr</h2>
-            <p className="mt-1 text-sm text-stone-400">{stepTitle}. {stepHint}</p>
+            <p className="mb-1 text-[10px] sm:text-[11px] font-semibold uppercase tracking-[0.2em] sm:tracking-[0.25em] text-emerald-400">Quiero Más</p>
+            <h2 className="title-font text-2xl sm:text-3xl uppercase tracking-[0.1em] sm:tracking-[0.12em] text-amber-400">Modo Nostr</h2>
+            <p className="mt-1 text-xs sm:text-sm text-stone-400">{stepTitle}. {stepHint}</p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1 sm:gap-2">
             {activeStep !== 'intro' && session.status !== 'connected' && !hasLinkedChallenge && (
               <button
                 type="button"
                 onClick={() => setStep('intro')}
-                className="rounded-lg p-2 text-stone-400 transition-colors hover:bg-stone-800 hover:text-white"
+                className="rounded-lg p-1.5 sm:p-2 text-stone-400 transition-colors hover:bg-stone-800 hover:text-white"
                 aria-label="Volver"
               >
-                <ArrowLeft size={18} />
+                <ArrowLeft size={16} />
               </button>
             )}
             <button
               type="button"
               onClick={onClose}
-              className="rounded-lg p-2 text-stone-400 transition-colors hover:bg-stone-800 hover:text-white"
+              className="rounded-lg p-1.5 sm:p-2 text-stone-400 transition-colors hover:bg-stone-800 hover:text-white"
               aria-label="Cerrar panel Nostr"
             >
-              <X size={20} />
+              <X size={18} />
             </button>
           </div>
         </div>
 
         {linkedChallengeId && linkedChallengeToken && (
-          <div className="mb-4 rounded-2xl border border-sky-800/60 bg-sky-950/30 px-4 py-3 text-sm text-sky-100">
+          <div className="mb-3 sm:mb-4 rounded-xl sm:rounded-2xl border border-sky-800/60 bg-sky-950/30 px-3 sm:px-4 py-2 sm:py-3 text-xs sm:text-sm text-sky-100">
             <p className="font-semibold">Llegaste desde un desafío</p>
             <p className="mt-1 text-sky-100/80">
               Conectate con Nostr para seguir con este reto. ID corto: <span className="font-mono">{linkedChallengeId.slice(0, 8)}</span>
@@ -119,6 +145,13 @@ export function NostrGatewayModal({ onClose, linkedChallengeId = '', linkedChall
                   : `Te lo mandó ${linkedChallenge.rivalName} como amistoso.`}
               </p>
             )}
+          </div>
+        )}
+
+        {matchError && (
+          <div className="mb-4 rounded-2xl border border-red-800/60 bg-red-950/30 px-4 py-3 text-sm text-red-100">
+            <p className="font-semibold">No se pudo entrar al desafío</p>
+            <p className="mt-1 text-red-100/80">{matchError}</p>
           </div>
         )}
 
@@ -156,9 +189,10 @@ export function NostrGatewayModal({ onClose, linkedChallengeId = '', linkedChall
               <button
                 type="button"
                 onClick={() => void acceptLinkedChallenge()}
-                className="rounded-2xl bg-emerald-600 px-4 py-3 text-sm font-bold uppercase tracking-wider text-white transition-colors hover:bg-emerald-500"
+                disabled={isCreatingMatch}
+                className="rounded-2xl bg-emerald-600 px-4 py-3 text-sm font-bold uppercase tracking-wider text-white transition-colors hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                Aceptar y jugar
+                {isCreatingMatch ? 'Entrando...' : 'Aceptar y jugar'}
               </button>
               <button
                 type="button"
@@ -250,18 +284,26 @@ export function NostrGatewayModal({ onClose, linkedChallengeId = '', linkedChall
                     </button>
                     <button
                       type="button"
-                      onClick={() => setShowQr((value) => !value)}
-                      disabled={bunkerToken.trim().length === 0}
+                      onClick={() => void handleCreateQr()}
+                      disabled={qrLoading}
                       className="flex items-center gap-2 rounded-lg bg-stone-700 px-3 py-2 text-sm font-semibold text-white transition-colors hover:bg-stone-600 disabled:cursor-not-allowed disabled:opacity-60"
                     >
                       <QrCode size={15} />
-                      {showQr ? 'Ocultar QR' : 'Generar QR'}
+                      {qrLoading ? 'Preparando QR...' : 'Generar QR'}
                     </button>
                   </div>
                   {showQr && bunkerQrUrl && (
                     <div className="mt-3 flex flex-col items-center rounded-2xl border border-stone-700 bg-stone-950/70 p-3">
                       <img src={bunkerQrUrl} alt="QR para bunker" className="h-44 w-44 rounded-xl bg-white p-2" />
-                      <p className="mt-2 text-center text-xs text-stone-500">Escanea y sigue desde tu signer remoto.</p>
+                      <p className="mt-2 text-center text-xs text-stone-500">Escaneá desde tu signer remoto y después confirmá la conexión.</p>
+                      <button
+                        type="button"
+                        onClick={() => void handleFinishQr()}
+                        disabled={qrLoading}
+                        className="mt-3 rounded-lg bg-emerald-700 px-3 py-2 text-sm font-semibold text-white transition-colors hover:bg-emerald-600 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {qrLoading ? 'Esperando conexión...' : 'Ya escaneé, conectar'}
+                      </button>
                     </div>
                   )}
                 </div>
@@ -349,18 +391,6 @@ export function NostrGatewayModal({ onClose, linkedChallengeId = '', linkedChall
           </div>
         )}
 
-        <div className="mt-4 flex items-center justify-between gap-4 rounded-2xl border border-emerald-800/60 bg-emerald-950/30 px-4 py-3 text-sm text-emerald-100">
-          <p className="max-w-md">
-            {activeStep === 'intro'
-              ? 'Seguís entrenando o entrás al modo Nostr cuando quieras subir la apuesta.'
-              : activeStep === 'connect'
-                ? 'Entrás, conectás y enseguida pasás al panel para invitar rival.'
-                : 'Ya estás adentro. El siguiente paso va a ser mandar desafíos reales por Nostr.'}
-          </p>
-          <button type="button" onClick={onClose} className="rounded-lg bg-emerald-700 px-4 py-2 font-semibold text-white transition-colors hover:bg-emerald-600">
-            {activeStep === 'invite' ? 'Cerrar panel' : 'Seguir entrenando'}
-          </button>
-        </div>
       </div>
     </div>
   );

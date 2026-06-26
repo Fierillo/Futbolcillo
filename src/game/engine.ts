@@ -47,32 +47,11 @@ function areCirclesTouching(a: { pos: Vec2; radius: number }, b: { pos: Vec2; ra
 export function createInitialState(): GameState {
   const players: Player[] = [];
 
-  // Home team (left side, blue)
-  const homePositions = [
+  // Away team (left side, red)
+  const awayPositions = [
     { x: 180, y: 220 },
     { x: 180, y: 380 },
     { x: 320, y: 300 },
-  ];
-  homePositions.forEach((pos, i) => {
-    players.push({
-      pos: vec2(pos.x, pos.y),
-      vel: vec2(0, 0),
-      radius: PLAYER_RADIUS,
-      mass: 3,
-      color: '#1e40af',
-      strokeColor: '#60a5fa',
-      team: 'home',
-      number: i + 1,
-      isSelected: false,
-      cooldown: 0,
-    });
-  });
-
-  // Away team (right side, red)
-  const awayPositions = [
-    { x: 820, y: 220 },
-    { x: 820, y: 380 },
-    { x: 680, y: 300 },
   ];
   awayPositions.forEach((pos, i) => {
     players.push({
@@ -83,6 +62,27 @@ export function createInitialState(): GameState {
       color: '#b91c1c',
       strokeColor: '#f87171',
       team: 'away',
+      number: i + 1,
+      isSelected: false,
+      cooldown: 0,
+    });
+  });
+
+  // Home team (right side, blue)
+  const homePositions = [
+    { x: 820, y: 220 },
+    { x: 820, y: 380 },
+    { x: 680, y: 300 },
+  ];
+  homePositions.forEach((pos, i) => {
+    players.push({
+      pos: vec2(pos.x, pos.y),
+      vel: vec2(0, 0),
+      radius: PLAYER_RADIUS,
+      mass: 3,
+      color: '#1e40af',
+      strokeColor: '#60a5fa',
+      team: 'home',
       number: i + 1,
       isSelected: false,
       cooldown: 0,
@@ -101,8 +101,8 @@ export function createInitialState(): GameState {
       trail: [],
     },
     goals: [
-      { x: 0, y: FIELD_HEIGHT / 2 - GOAL_HEIGHT / 2, width: GOAL_WIDTH, height: GOAL_HEIGHT, team: 'home' },
-      { x: FIELD_WIDTH - GOAL_WIDTH, y: FIELD_HEIGHT / 2 - GOAL_HEIGHT / 2, width: GOAL_WIDTH, height: GOAL_HEIGHT, team: 'away' },
+      { x: 0, y: FIELD_HEIGHT / 2 - GOAL_HEIGHT / 2, width: GOAL_WIDTH, height: GOAL_HEIGHT, team: 'away' },
+      { x: FIELD_WIDTH - GOAL_WIDTH, y: FIELD_HEIGHT / 2 - GOAL_HEIGHT / 2, width: GOAL_WIDTH, height: GOAL_HEIGHT, team: 'home' },
     ],
     score: { home: 0, away: 0 },
     turn: 'home',
@@ -116,6 +116,8 @@ export function createInitialState(): GameState {
     dragStart: null,
     dragCurrent: null,
     winner: null,
+    lastShot: null,
+    lastShotAnimation: null,
     message: '',
     messageTimer: 0,
     particles: [],
@@ -178,15 +180,14 @@ function checkGoal(state: GameState): 'home' | 'away' | null {
   for (const goal of state.goals) {
     const inGoalY = ball.pos.y > goal.y && ball.pos.y < goal.y + goal.height;
     if (!inGoalY) continue;
-    // Home goal is on the left, away goal on the right
+
+    const inGoalX = ball.pos.x >= goal.x && ball.pos.x <= goal.x + goal.width;
+    if (!inGoalX) continue;
+
     if (goal.team === 'home') {
-      if (ball.pos.x < goal.x + goal.width) {
-        return 'away';
-      }
+      return 'away';
     } else {
-      if (ball.pos.x > goal.x) {
-        return 'home';
-      }
+      return 'home';
     }
   }
   return null;
@@ -197,12 +198,12 @@ function resetPositions(state: GameState, scoringTeam: 'home' | 'away') {
   state.ball.vel = vec2(0, 0);
   state.ball.trail = [];
 
-  const homePositions = [
+  const awayPositions = [
     { x: 180, y: 220 },
     { x: 180, y: 380 },
     { x: 320, y: 300 },
   ];
-  const awayPositions = [
+  const homePositions = [
     { x: 820, y: 220 },
     { x: 820, y: 380 },
     { x: 680, y: 300 },
@@ -212,12 +213,12 @@ function resetPositions(state: GameState, scoringTeam: 'home' | 'away') {
   for (const p of state.players) {
     p.vel = vec2(0, 0);
     p.cooldown = 0;
-    if (p.team === 'home') {
-      p.pos = vec2(homePositions[hi].x, homePositions[hi].y);
-      hi++;
-    } else {
+    if (p.team === 'away') {
       p.pos = vec2(awayPositions[ai].x, awayPositions[ai].y);
       ai++;
+    } else {
+      p.pos = vec2(homePositions[hi].x, homePositions[hi].y);
+      hi++;
     }
   }
 

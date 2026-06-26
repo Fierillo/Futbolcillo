@@ -10,6 +10,7 @@ type CreateMatchBody = {
   homePubkey: string;
   awayPubkey: string;
   mode: string;
+  amountSats?: number;
 };
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -24,7 +25,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return;
     }
 
-    const challengeRows = await query<{
+    await query`
+      insert into users (pubkey) values (${body.homePubkey})
+      on conflict (pubkey) do nothing
+    `;
+    await query`
+      insert into users (pubkey) values (${body.awayPubkey})
+      on conflict (pubkey) do nothing
+    `;
+
+    let challengeRows = await query<{
       id: string;
       access_token: string;
       state: string;
@@ -35,9 +45,26 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       limit 1
     `;
 
+    if (!challengeRows[0]) {
+      await query`
+        insert into challenges (id, access_token, owner_pubkey, rival_pubkey, mode, state, amount_sats, expires_at)
+        values (${body.challengeId}, ${body.accessToken}, ${body.homePubkey}, ${body.awayPubkey}, ${body.mode}, 'accepted', ${body.amountSats || 0}, (now() + interval '24 hours'))
+      `;
+      challengeRows = await query<{
+        id: string;
+        access_token: string;
+        state: string;
+      }>`
+        select id, access_token, state
+        from challenges
+        where id = ${body.challengeId}
+        limit 1
+      `;
+    }
+
     const challenge = challengeRows[0];
     if (!challenge) {
-      res.status(404).json({ ok: false, error: 'Challenge not found' });
+      res.status(500).json({ ok: false, error: 'Challenge not found after creation' });
       return;
     }
 
@@ -46,9 +73,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return;
     }
 
-    if (challenge.state !== 'accepted') {
-      res.status(409).json({ ok: false, error: `Challenge is ${challenge.state}, not accepted` });
-      return;
+    if (challenge.state !== 'accepted' && challenge.state !== 'in_match') {
+      await query`
+        update challenges set state = 'accepted', updated_at = now() where id = ${body.challengeId}
+      `;
     }
 
     const existingMatchRows = await query<{ id: string }>`
