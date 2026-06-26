@@ -15,9 +15,11 @@ import type { MatchState } from './game/physics';
 import { GameState, FIELD_WIDTH, FIELD_HEIGHT } from './game/types';
 import { NostrGatewayModal } from './nostr/NostrGatewayModal';
 import { useNostrSession } from './nostr/session-store';
+import { getNostrClient } from './nostr/client';
 import { GlobalSyncStatus } from './online/GlobalSyncStatus';
 import { useSyncStatus } from './online/sync-store';
 import { useMatchStore } from './match/store';
+import { cacheDb } from './cache/db';
 
 export default function App() {
   const [gameState, setGameState] = useState<GameState>(createInitialState);
@@ -35,7 +37,7 @@ export default function App() {
   const { setSyncState } = useSyncStatus();
   const { session, refreshProfile } = useNostrSession();
   const { activeChallenge, pendingIncomingCount } = useChallengeStore();
-  const { activeMatchId, matchState, matchError, isCreatingMatch, isAnimatingShot, pendingShotAnimation, createMatch, submitShot, clearMatch, finishShotAnimation } = useMatchStore();
+  const { activeMatchId, activeMatchMeta, matchState, matchError, isCreatingMatch, isAnimatingShot, pendingShotAnimation, isSubmittingRematch, createMatch, submitShot, requestRematch, acceptRematch, clearMatch, finishShotAnimation } = useMatchStore();
   const localTeam = activeChallenge?.direction === 'incoming' ? 'away' : activeChallenge?.direction === 'outgoing' ? 'home' : null;
 
   usePhaseOneBoot();
@@ -84,6 +86,56 @@ export default function App() {
     if (!activeMatchId) return;
     setShowNostrGateway(false);
   }, [activeMatchId]);
+
+  // Fetch rival Nostr profile for avatar when match starts
+  const [rivalAvatarUrl, setRivalAvatarUrl] = useState<string | null>(null);
+  useEffect(() => {
+    if (!activeChallenge || !activeMatchId) {
+      setRivalAvatarUrl(null);
+      return;
+    }
+
+    const rivalPubkey = activeChallenge.rivalPubkey;
+    if (!rivalPubkey) return;
+
+    let cancelled = false;
+
+    const fetchRivalProfile = async () => {
+      // Check Dexie cache first
+      const cached = await cacheDb.profiles.get(rivalPubkey);
+      if (cached?.avatarUrl && !cancelled) {
+        setRivalAvatarUrl(cached.avatarUrl);
+        return;
+      }
+
+      try {
+        const ndk = getNostrClient();
+        await ndk.connect(1500);
+        const user = ndk.getUser({ pubkey: rivalPubkey });
+        const profile = await user.fetchProfile();
+        if (cancelled) return;
+
+        const avatarUrl = profile?.image || profile?.picture || '';
+        if (avatarUrl) {
+          setRivalAvatarUrl(avatarUrl);
+          // Cache for next time
+          await cacheDb.profiles.put({
+            pubkey: rivalPubkey,
+            avatarUrl,
+            displayName: profile?.displayName || profile?.name || '',
+            nip05: profile?.nip05 || '',
+            lud16: profile?.lud16 || '',
+            updatedAt: Date.now(),
+          });
+        }
+      } catch {
+        // Relay fetch failed, keep DiceBear fallback
+      }
+    };
+
+    void fetchRivalProfile();
+    return () => { cancelled = true; };
+  }, [activeChallenge, activeMatchId]);
 
   // Responsive scaling
   useEffect(() => {
@@ -226,20 +278,24 @@ export default function App() {
           simulateStep(next as unknown as MatchState);
 
           if (!foulBefore && next.activeShotCommittedFoul) {
-            next.message = '¡Falta! El rival gana dos jugadas.';
+            const foulTeam = next.activeShotPlayer !== null ? next.players[next.activeShotPlayer]?.team : null;
+            const foulVictim = foulTeam === 'home' ? awayAlias : homeAlias;
+            next.message = `¡Falta! ${foulVictim.toUpperCase()} gana dos jugadas.`;
             next.messageTimer = 120;
             next.cameraShake = 6;
           }
 
           if (next.score.home !== scoreBefore.home || next.score.away !== scoreBefore.away) {
             const goalScorer = next.score.home !== scoreBefore.home ? 'home' : 'away';
-            next.message = `¡GOL DE ${goalScorer === 'home' ? 'LOCAL' : 'RIVAL'}!`;
+            const scorerName = goalScorer === 'home' ? homeAlias : awayAlias;
+            next.message = `¡GOL DE ${scorerName.toUpperCase()}!`;
             next.messageTimer = 120;
             next.cameraShake = 12;
           }
 
           if (!winnerBefore && next.winner) {
-            next.message = `¡${next.winner === 'home' ? 'LOCAL' : 'RIVAL'} CAMPEÓN!`;
+            const winnerName = next.winner === 'home' ? homeAlias : awayAlias;
+            next.message = `¡${winnerName.toUpperCase()} CAMPEÓN!`;
             next.messageTimer = 120;
             next.cameraShake = 12;
           }
@@ -386,6 +442,7 @@ export default function App() {
     : activeChallenge?.direction === 'incoming'
       ? session.profile?.name || 'Local'
       : 'Máquina';
+  const localPubkey = session.profile?.pubkey || '';
 
   const turnText = activeChallenge
     ? gameState.turn === 'home'
@@ -397,13 +454,15 @@ export default function App() {
   const turnColor = gameState.turn === 'home' ? 'text-blue-400' : 'text-red-400';
   const phaseText = gameState.phase === 'aiming' ? 'Apuntá y pateá' : 'En juego...';
 
+  const rivalFallbackAvatar = `https://api.dicebear.com/9.x/bottts/svg?seed=${activeChallenge?.rivalPubkey || 'rival'}`;
+
   const homeIdentity = activeChallenge
     ? {
         name: homeAlias,
         pubkey: activeChallenge.direction === 'outgoing' ? session.profile?.pubkey || '' : activeChallenge.rivalPubkey,
         avatarUrl: activeChallenge.direction === 'outgoing'
           ? session.profile?.avatarUrl || `https://api.dicebear.com/9.x/shapes/svg?seed=${session.profile?.pubkey || 'local'}`
-          : `https://api.dicebear.com/9.x/bottts/svg?seed=${activeChallenge.rivalPubkey}`,
+          : rivalAvatarUrl || rivalFallbackAvatar,
       }
     : session.profile;
 
@@ -412,7 +471,7 @@ export default function App() {
         name: awayAlias,
         pubkey: activeChallenge.direction === 'outgoing' ? activeChallenge.rivalPubkey : session.profile?.pubkey || '',
         avatarUrl: activeChallenge.direction === 'outgoing'
-          ? `https://api.dicebear.com/9.x/bottts/svg?seed=${activeChallenge.rivalPubkey}`
+          ? rivalAvatarUrl || rivalFallbackAvatar
           : session.profile?.avatarUrl || `https://api.dicebear.com/9.x/shapes/svg?seed=${session.profile?.pubkey || 'away'}`,
       }
     : {
@@ -420,6 +479,14 @@ export default function App() {
         pubkey: 'training-bot',
         avatarUrl: 'https://api.dicebear.com/9.x/bottts/svg?seed=training-bot',
       };
+
+  const winnerName = gameState.winner === 'home' ? homeAlias : awayAlias;
+  const localWon = Boolean(activeChallenge && localTeam && gameState.winner && localTeam === gameState.winner);
+  const rematchRequestedBy = activeMatchMeta?.rematchRequestedBy || null;
+  const rematchMatchId = activeMatchMeta?.rematchMatchId || null;
+  const rematchRequestedBySelf = Boolean(localPubkey && rematchRequestedBy === localPubkey);
+  const rematchRequestedByOther = Boolean(rematchRequestedBy && localPubkey && rematchRequestedBy !== localPubkey);
+  const rematchRequesterName = rematchRequestedBy === homeIdentity?.pubkey ? homeAlias : rematchRequestedBy === awayIdentity?.pubkey ? awayAlias : 'El rival';
 
   return (
     <div className="min-h-screen bg-stone-900 text-white flex flex-col items-center select-none">
@@ -593,17 +660,60 @@ export default function App() {
           <div className="bg-stone-800 rounded-2xl p-8 text-center shadow-2xl max-w-sm mx-4 border border-stone-700">
             <Trophy size={64} className="mx-auto mb-4 text-amber-400" />
             <h2 className="text-3xl font-bold mb-2">
-              {gameState.winner === 'home' ? '¡LOCAL CAMPEÓN!' : '¡RIVAL CAMPEÓN!'}
+              {`¡${winnerName.toUpperCase()} CAMPEÓN!`}
             </h2>
             <p className="text-stone-400 mb-6">
               {gameState.score.home} - {gameState.score.away}
             </p>
-            <button
-              onClick={resetGame}
-              className="px-6 py-3 bg-amber-600 hover:bg-amber-500 rounded-lg font-bold transition-colors"
-            >
-              Jugar de nuevo
-            </button>
+            {!activeChallenge ? (
+              <button
+                onClick={resetGame}
+                className="px-6 py-3 bg-amber-600 hover:bg-amber-500 rounded-lg font-bold transition-colors"
+              >
+                Jugar de nuevo
+              </button>
+            ) : (
+              <div className="space-y-3">
+                {rematchMatchId ? (
+                  <div className="rounded-lg bg-stone-900/60 px-4 py-3 text-sm text-stone-300">
+                    Armando revancha...
+                  </div>
+                ) : rematchRequestedByOther ? (
+                  <>
+                    <p className="text-sm text-stone-300">{rematchRequesterName} quiere jugar de vuelta.</p>
+                    <button
+                      type="button"
+                      disabled={isSubmittingRematch || !localPubkey}
+                      onClick={() => void acceptRematch(localPubkey)}
+                      className="w-full px-6 py-3 bg-emerald-600 hover:bg-emerald-500 rounded-lg font-bold transition-colors disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {isSubmittingRematch ? 'Aceptando...' : 'Aceptar revancha'}
+                    </button>
+                  </>
+                ) : rematchRequestedBySelf ? (
+                  <div className="rounded-lg bg-stone-900/60 px-4 py-3 text-sm text-stone-300">
+                    Esperando confirmación del rival...
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={isSubmittingRematch || !localPubkey}
+                    onClick={() => void requestRematch(localPubkey)}
+                    className="w-full px-6 py-3 bg-amber-600 hover:bg-amber-500 rounded-lg font-bold transition-colors disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {isSubmittingRematch ? 'Enviando...' : localWon ? 'Jugar devuelta' : '¿Revancha?'}
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  onClick={clearMatch}
+                  className="w-full px-6 py-3 bg-stone-700 hover:bg-stone-600 rounded-lg font-bold transition-colors"
+                >
+                  Terminar partida
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}

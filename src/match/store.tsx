@@ -8,17 +8,23 @@ type ActiveMatch = {
   homePubkey: string;
   awayPubkey: string;
   state: MatchState;
+  rematchRequestedBy?: string | null;
+  rematchMatchId?: string | null;
 };
 
 interface MatchContextValue {
   activeMatchId: string | null;
   matchState: MatchState | null;
+  activeMatchMeta: ActiveMatch | null;
   matchError: string;
   isCreatingMatch: boolean;
   isAnimatingShot: boolean;
   pendingShotAnimation: ShotAnimation | null;
+  isSubmittingRematch: boolean;
   createMatch: (challenge: CachedChallenge) => Promise<void>;
   submitShot: (playerIndex: number, velX: number, velY: number) => Promise<void>;
+  requestRematch: (requesterPubkey: string) => Promise<void>;
+  acceptRematch: (accepterPubkey: string) => Promise<void>;
   clearMatch: () => void;
   refreshMatchState: () => Promise<void>;
   finishShotAnimation: () => void;
@@ -34,6 +40,7 @@ export function MatchProvider({ children }: { children: ReactNode }) {
   const [isCreatingMatch, setIsCreatingMatch] = useState(false);
   const [isAnimatingShot, setIsAnimatingShot] = useState(false);
   const [pendingShotAnimation, setPendingShotAnimation] = useState<ShotAnimation | null>(null);
+  const [isSubmittingRematch, setIsSubmittingRematch] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const creatingForChallengeRef = useRef<string | null>(null);
   const matchStateRef = useRef<MatchState | null>(null);
@@ -51,6 +58,7 @@ export function MatchProvider({ children }: { children: ReactNode }) {
     setMatchError('');
     setIsAnimatingShot(false);
     setPendingShotAnimation(null);
+    setIsSubmittingRematch(false);
     lastSeenShotIdRef.current = null;
     creatingForChallengeRef.current = null;
     if (pollRef.current) {
@@ -82,12 +90,6 @@ export function MatchProvider({ children }: { children: ReactNode }) {
         if (prev && JSON.stringify(prev) === JSON.stringify(match.state)) return prev;
         return match.state;
       });
-      if (match.status === 'finished') {
-        if (pollRef.current) {
-          clearInterval(pollRef.current);
-          pollRef.current = null;
-        }
-      }
     }
   }, [activeMatchId, fetchMatchState]);
 
@@ -103,12 +105,24 @@ export function MatchProvider({ children }: { children: ReactNode }) {
       const match = await fetchMatchState(activeMatchId);
       if (!match) return;
 
+      if (match.rematchMatchId && match.rematchMatchId !== activeMatchId) {
+        setActiveMatchId(match.rematchMatchId);
+        const rematch = await fetchMatchState(match.rematchMatchId);
+        if (rematch) {
+          setActiveMatchMeta(rematch);
+          setMatchState(rematch.state);
+          setIsAnimatingShot(false);
+          setPendingShotAnimation(null);
+          setIsSubmittingRematch(false);
+          lastSeenShotIdRef.current = null;
+        }
+        return;
+      }
+
       setActiveMatchMeta(match);
 
       const anim = match.state.lastShotAnimation;
-      const shotId = anim
-        ? `${anim.playerIndex}_${anim.velX}_${anim.velY}_${JSON.stringify(anim.initialState.players[0].pos)}`
-        : null;
+      const shotId = anim?.id ?? null;
 
       if (anim && shotId && shotId !== lastSeenShotIdRef.current && !isAnimatingShot) {
         lastSeenShotIdRef.current = shotId;
@@ -121,11 +135,6 @@ export function MatchProvider({ children }: { children: ReactNode }) {
           if (prev && JSON.stringify(prev) === JSON.stringify(match.state)) return prev;
           return match.state;
         });
-      }
-
-      if (match.status === 'finished' && pollRef.current) {
-        clearInterval(pollRef.current);
-        pollRef.current = null;
       }
     };
 
@@ -222,7 +231,7 @@ export function MatchProvider({ children }: { children: ReactNode }) {
         // Mark this shot as seen so polling doesn't re-detect it
         const anim = data.state.lastShotAnimation;
         if (anim) {
-          lastSeenShotIdRef.current = `${anim.playerIndex}_${anim.velX}_${anim.velY}_${JSON.stringify(anim.initialState.players[0].pos)}`;
+          lastSeenShotIdRef.current = anim.id;
         }
         // Don't set pendingShotAnimation - animation already running locally
       }
@@ -232,15 +241,69 @@ export function MatchProvider({ children }: { children: ReactNode }) {
     }
   }, [activeMatchId, activeMatchMeta, refreshMatchState]);
 
+  const requestRematch = useCallback(async (requesterPubkey: string) => {
+    if (!activeMatchId || !activeMatchMeta || !matchStateRef.current || !requesterPubkey) return;
+    setIsSubmittingRematch(true);
+    setMatchError('');
+    try {
+      const res = await fetch('/api/matches/rematch-request', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ matchId: activeMatchId, requesterPubkey }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) {
+        if (res.status === 409) {
+          await refreshMatchState();
+          return;
+        }
+        setMatchError(data.error || 'No se pudo pedir revancha.');
+        return;
+      }
+      await refreshMatchState();
+    } catch {
+      setMatchError('No se pudo conectar con el servidor.');
+    } finally {
+      setIsSubmittingRematch(false);
+    }
+  }, [activeMatchId, activeMatchMeta, refreshMatchState]);
+
+  const acceptRematch = useCallback(async (accepterPubkey: string) => {
+    if (!activeMatchId || !activeMatchMeta || !matchStateRef.current || !accepterPubkey) return;
+    setIsSubmittingRematch(true);
+    setMatchError('');
+    try {
+      const res = await fetch('/api/matches/rematch-accept', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ matchId: activeMatchId, accepterPubkey }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) {
+        setMatchError(data.error || 'No se pudo aceptar la revancha.');
+        return;
+      }
+      await refreshMatchState();
+    } catch {
+      setMatchError('No se pudo conectar con el servidor.');
+    } finally {
+      setIsSubmittingRematch(false);
+    }
+  }, [activeMatchId, activeMatchMeta, refreshMatchState]);
+
   const value = {
     activeMatchId,
+    activeMatchMeta,
     matchState,
     matchError,
     isCreatingMatch,
     isAnimatingShot,
     pendingShotAnimation,
+    isSubmittingRematch,
     createMatch,
     submitShot,
+    requestRematch,
+    acceptRematch,
     clearMatch,
     refreshMatchState,
     finishShotAnimation,

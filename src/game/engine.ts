@@ -341,7 +341,9 @@ export function updateGame(state: GameState, _dt: number): GameState {
   const goalScorer = goalsBlockedByFoul ? null : checkGoal(state);
   if (goalScorer) {
     state.score[goalScorer]++;
-    state.message = `¡GOL DE ${goalScorer === 'home' ? 'LOCAL' : 'RIVAL'}!`;
+    const shooter = state.activeShotPlayer !== null ? state.players[state.activeShotPlayer] : null;
+    const shooterLabel = shooter ? `JUGADOR ${shooter.number}` : (goalScorer === 'home' ? 'LOCAL' : 'RIVAL');
+    state.message = `¡GOL DE ${shooterLabel}!`;
     state.messageTimer = 120;
     state.cameraShake = 12;
     spawnParticles(state, ball.pos, 50, '#fbbf24', 8, 5);
@@ -349,7 +351,7 @@ export function updateGame(state: GameState, _dt: number): GameState {
 
     if (state.score[goalScorer] >= WIN_SCORE) {
       state.winner = goalScorer;
-      state.message = `¡${goalScorer === 'home' ? 'LOCAL' : 'RIVAL'} CAMPEÓN!`;
+      state.message = `¡${shooterLabel} CAMPEÓN!`;
     }
 
     resetPositions(state, goalScorer);
@@ -410,7 +412,7 @@ export function updateGame(state: GameState, _dt: number): GameState {
           state.activeShotCommittedFoul = true;
           state.bonusTurnTeam = other.team;
           state.pendingBonusTurns = 1;
-          state.message = '¡Falta! El rival gana dos jugadas.';
+          state.message = `¡Falta de JUGADOR ${shooter.number}! JUGADOR ${other.number} gana dos jugadas.`;
           state.messageTimer = 120;
           state.cameraShake = 6;
           spawnParticles(state, shooter.pos, 18, '#f87171', 3, 3);
