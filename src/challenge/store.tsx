@@ -303,15 +303,23 @@ export function ChallengeProvider({ children }: { children: ReactNode }) {
       cacheDb.profiles.toArray(),
     ]);
 
+    const now = Date.now();
+    const activeRecords = records.filter((record) => record.expirationAt > now);
+    const expiredIds = records.filter((record) => record.expirationAt <= now).map((record) => record.id);
+
+    if (expiredIds.length > 0) {
+      await cacheDb.challenges.bulkDelete(expiredIds);
+    }
+
     const filteredProfiles = profiles.filter((profile) => profile.pubkey !== session.pubkey);
 
     filteredProfiles.sort((a, b) => {
-      const lastA = records.find((record) => record.rivalPubkey === a.pubkey)?.updatedAt ?? 0;
-      const lastB = records.find((record) => record.rivalPubkey === b.pubkey)?.updatedAt ?? 0;
+      const lastA = activeRecords.find((record) => record.rivalPubkey === a.pubkey)?.updatedAt ?? 0;
+      const lastB = activeRecords.find((record) => record.rivalPubkey === b.pubkey)?.updatedAt ?? 0;
       return lastB - lastA || b.updatedAt - a.updatedAt;
     });
 
-    setChallenges(records);
+    setChallenges(activeRecords);
     setRecentRivals(filteredProfiles.slice(0, 6));
   }, [session.pubkey]);
 
@@ -530,42 +538,124 @@ export function ChallengeProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    const challenge = await cacheDb.challenges.get(challengeId);
-    if (!challenge || challenge.accessToken !== token || challenge.ownerPubkey !== session.pubkey) {
-      setLinkedChallenge(null);
+    const cachedChallenge = await cacheDb.challenges.get(challengeId);
+    if (cachedChallenge && cachedChallenge.accessToken === token) {
+      setLinkedChallenge(cachedChallenge);
+      setChallengeError('');
       return;
     }
 
-    setLinkedChallenge(challenge);
+    try {
+      const res = await fetch(`/api/challenges/status?id=${encodeURIComponent(challengeId)}&token=${encodeURIComponent(token)}`);
+      const data = await res.json().catch(() => ({}));
+
+      if (res.ok && data.ok && data.challenge) {
+        const challenge = data.challenge as {
+          id: string;
+          accessToken: string;
+          ownerPubkey: string;
+          rivalPubkey: string;
+          mode: ChallengeMode;
+          state: ChallengeState;
+          amountSats: number;
+          expiresAt: string;
+          createdAt: string;
+          updatedAt: string;
+        };
+
+        const isOwner = challenge.ownerPubkey === session.pubkey;
+        const rivalPubkey = isOwner ? challenge.rivalPubkey : challenge.ownerPubkey;
+        const senderProfile = await cacheDb.profiles.get(rivalPubkey);
+
+        const normalizedChallenge: CachedChallenge = {
+          id: challenge.id,
+          accessToken: challenge.accessToken,
+          ownerPubkey: session.pubkey,
+          direction: isOwner ? 'outgoing' : 'incoming',
+          mode: challenge.mode,
+          state: challenge.state,
+          rivalPubkey,
+          rivalName: senderProfile?.displayName || `Rival ${rivalPubkey.slice(0, 8)}`,
+          amountSats: challenge.amountSats,
+          expirationAt: new Date(challenge.expiresAt).getTime(),
+          createdAt: new Date(challenge.createdAt).getTime(),
+          updatedAt: new Date(challenge.updatedAt).getTime(),
+        };
+
+        await cacheDb.challenges.put(normalizedChallenge);
+        setLinkedChallenge(normalizedChallenge);
+        setChallengeError('');
+        return;
+      }
+
+      // Backend doesn't have the challenge yet, create a local placeholder with the token as proof
+      const localChallenge: CachedChallenge = {
+        id: challengeId,
+        accessToken: token,
+        ownerPubkey: session.pubkey,
+        direction: 'incoming',
+        mode: 'friendly',
+        state: 'received',
+        rivalPubkey: '',
+        rivalName: 'Desconocido',
+        amountSats: 0,
+        expirationAt: Date.now() + 24 * 60 * 60 * 1000,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+
+      await cacheDb.challenges.put(localChallenge);
+      setLinkedChallenge(localChallenge);
+      setChallengeError('');
+    } catch {
+      setLinkedChallenge(null);
+      setChallengeError('No se pudo cargar el desafío desde el servidor.');
+    }
   }, [session.pubkey]);
 
   const acceptLinkedChallenge = useCallback(async () => {
     if (!linkedChallenge) return;
 
-    try {
-      const res = await fetch('/api/challenges/accept', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          challengeId: linkedChallenge.id,
-          accessToken: linkedChallenge.accessToken,
-          rivalPubkey: session.pubkey,
-        }),
-      });
+    let alreadyInMatch = false;
 
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        setChallengeError(data.error || 'No se pudo aceptar el desafío.');
+    if (linkedChallenge.state === 'in_match' || linkedChallenge.state === 'accepted') {
+      alreadyInMatch = true;
+    } else {
+      try {
+        const res = await fetch('/api/challenges/accept', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            challengeId: linkedChallenge.id,
+            accessToken: linkedChallenge.accessToken,
+            rivalPubkey: session.pubkey,
+            ownerPubkey: linkedChallenge.ownerPubkey,
+            mode: linkedChallenge.mode,
+            amountSats: linkedChallenge.amountSats,
+            expiresAt: new Date(linkedChallenge.expirationAt).toISOString(),
+          }),
+        });
+
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          const errorMessage = data.error || 'No se pudo aceptar el desafío.';
+
+          if (res.status === 409) {
+            alreadyInMatch = true;
+          } else {
+            setChallengeError(errorMessage);
+            return;
+          }
+        }
+      } catch {
+        setChallengeError('No se pudo conectar con el servidor.');
         return;
       }
-    } catch {
-      setChallengeError('No se pudo conectar con el servidor.');
-      return;
     }
 
     const nextChallenge: CachedChallenge = {
       ...linkedChallenge,
-      state: 'accepted',
+      state: alreadyInMatch ? 'in_match' : 'accepted',
       updatedAt: Date.now(),
     };
 
@@ -591,30 +681,46 @@ export function ChallengeProvider({ children }: { children: ReactNode }) {
   }, [linkedChallenge, refreshChallenges]);
 
   const acceptIncomingChallenge = useCallback(async (challenge: CachedChallenge) => {
-    try {
-      const res = await fetch('/api/challenges/accept', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          challengeId: challenge.id,
-          accessToken: challenge.accessToken,
-          rivalPubkey: session.pubkey,
-        }),
-      });
+    let alreadyInMatch = false;
 
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        setChallengeError(data.error || 'No se pudo aceptar el desafío.');
+    if (challenge.state === 'in_match' || challenge.state === 'accepted') {
+      alreadyInMatch = true;
+    } else {
+      try {
+        const res = await fetch('/api/challenges/accept', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            challengeId: challenge.id,
+            accessToken: challenge.accessToken,
+            rivalPubkey: session.pubkey,
+            ownerPubkey: challenge.ownerPubkey,
+            mode: challenge.mode,
+            amountSats: challenge.amountSats,
+            expiresAt: new Date(challenge.expirationAt).toISOString(),
+          }),
+        });
+
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          const errorMessage = data.error || 'No se pudo aceptar el desafío.';
+
+          if (res.status === 409) {
+            alreadyInMatch = true;
+          } else {
+            setChallengeError(errorMessage);
+            return;
+          }
+        }
+      } catch {
+        setChallengeError('No se pudo conectar con el servidor.');
         return;
       }
-    } catch {
-      setChallengeError('No se pudo conectar con el servidor.');
-      return;
     }
 
     const nextChallenge: CachedChallenge = {
       ...challenge,
-      state: 'accepted',
+      state: alreadyInMatch ? 'in_match' : 'accepted',
       updatedAt: Date.now(),
     };
 

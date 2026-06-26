@@ -9,9 +9,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     await ensureSchema();
     const challengeId = (req.query.id as string) || '';
+    const accessToken = (req.query.token as string) || '';
 
-    if (!challengeId) {
-      res.status(400).json({ ok: false, error: 'Missing challenge id' });
+    if (!challengeId || !accessToken) {
+      res.status(400).json({ ok: false, error: 'Missing challenge id or token' });
       return;
     }
 

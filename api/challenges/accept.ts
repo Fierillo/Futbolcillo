@@ -7,6 +7,10 @@ type AcceptChallengeBody = {
   challengeId: string;
   accessToken: string;
   rivalPubkey: string;
+  ownerPubkey?: string;
+  mode?: string;
+  amountSats?: number;
+  expiresAt?: string;
 };
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -21,7 +25,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return;
     }
 
-    const rows = await query<{
+    let rows = await query<{
       id: string;
       access_token: string;
       owner_pubkey: string;
@@ -34,7 +38,38 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       limit 1
     `;
 
-    const challenge = rows[0];
+    let challenge = rows[0];
+
+    if (!challenge && body.ownerPubkey) {
+      const expiresAt = body.expiresAt || new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+
+      await query`
+        insert into users (pubkey) values (${body.ownerPubkey})
+        on conflict (pubkey) do nothing
+      `;
+      await query`
+        insert into users (pubkey) values (${body.rivalPubkey})
+        on conflict (pubkey) do nothing
+      `;
+      await query`
+        insert into challenges (id, access_token, owner_pubkey, rival_pubkey, mode, state, amount_sats, expires_at)
+        values (${body.challengeId}, ${body.accessToken}, ${body.ownerPubkey}, ${body.rivalPubkey}, ${body.mode || 'friendly'}, 'accepted', ${body.amountSats || 0}, ${expiresAt}::timestamptz)
+      `;
+
+      rows = await query<{
+        id: string;
+        access_token: string;
+        owner_pubkey: string;
+        rival_pubkey: string;
+        state: string;
+      }>`
+        select id, access_token, owner_pubkey, rival_pubkey, state
+        from challenges
+        where id = ${body.challengeId}
+        limit 1
+      `;
+      challenge = rows[0];
+    }
 
     if (!challenge) {
       res.status(404).json({ ok: false, error: 'Challenge not found' });
@@ -51,7 +86,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return;
     }
 
-    if (challenge.state !== 'sent' && challenge.state !== 'received') {
+    if (challenge.state !== 'sent' && challenge.state !== 'received' && challenge.state !== 'accepted') {
       res.status(409).json({ ok: false, error: `Challenge is already ${challenge.state}` });
       return;
     }

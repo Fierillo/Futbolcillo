@@ -1,6 +1,9 @@
-import { useMemo } from 'react';
-import { Clock3, Play, Check, Loader } from 'lucide-react';
+import { useMemo, useState } from 'react';
+import { Check, Clock3, Copy, Loader, Play } from 'lucide-react';
+import { getPublicAppUrl } from '../config/public-app-url';
 import { useChallengeStore } from './store';
+import { useMatchStore } from '../match/store';
+import { useNostrSession } from '../nostr/session-store';
 import type { CachedChallenge, ChallengeFilter } from './types';
 
 interface Props {
@@ -101,11 +104,37 @@ export function ChallengeHistoryPanel({ onAction }: Props) {
     acceptIncomingChallenge,
     enterAcceptedChallenge,
   } = useChallengeStore();
+  const { matchState } = useMatchStore();
+  const { session } = useNostrSession();
 
   const emptyText = useMemo(() => {
     if (selectedFilter === 'all') return 'Todavía no tenés desafíos guardados.';
     return 'No hay elementos para este filtro.';
   }, [selectedFilter]);
+  const [copiedChallengeId, setCopiedChallengeId] = useState<string | null>(null);
+
+  const shareChallenge = async (challenge: CachedChallenge) => {
+    const challengeUrl = `${getPublicAppUrl()}?challenge=${challenge.id}&token=${challenge.accessToken}`;
+
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          title: 'Desafío de Futbolcillo',
+          text: `Te pasé este desafío de Futbolcillo: ${challenge.id}`,
+          url: challengeUrl,
+        });
+        return;
+      } catch {
+        // Fall through to clipboard if the user cancels or share is unsupported by the current context.
+      }
+    }
+
+    await navigator.clipboard.writeText(challengeUrl);
+    setCopiedChallengeId(challenge.id);
+    window.setTimeout(() => {
+      setCopiedChallengeId((current) => (current === challenge.id ? null : current));
+    }, 1500);
+  };
 
   return (
     <div className="rounded-2xl border border-stone-700 bg-stone-800/70 p-3">
@@ -140,6 +169,15 @@ export function ChallengeHistoryPanel({ onAction }: Props) {
             const rivalAvatar = rivalProfile?.avatarUrl || `https://api.dicebear.com/9.x/shapes/svg?seed=${challenge.rivalPubkey}`;
             const isActive = challenge.id === activeChallengeId;
             const isPending = !isFinishedState(challenge.state) && challenge.state !== 'accepted' && challenge.state !== 'in_match';
+            const challengeUrl = `${getPublicAppUrl()}?challenge=${challenge.id}&token=${challenge.accessToken}`;
+            const isOutgoing = challenge.direction === 'outgoing';
+            const homeAlias = isOutgoing ? (session.profile?.name || 'Local') : (challenge.rivalName || 'Rival');
+            const awayAlias = isOutgoing ? (challenge.rivalName || 'Rival') : (session.profile?.name || 'Local');
+            const turnAlias = isActive && matchState
+              ? matchState.turn === 'home'
+                ? homeAlias
+                : awayAlias
+              : null;
 
             return (
               <div
@@ -164,9 +202,22 @@ export function ChallengeHistoryPanel({ onAction }: Props) {
                       <span className="text-sky-400">Enviado</span>
                     )}
                     {challenge.state === 'in_match' && (
-                      <span className="text-amber-400">En partida</span>
+                      <span className="text-amber-400">En partida • Turno: {turnAlias || 'calculando...'}</span>
                     )}
                     {challenge.mode === 'wager' && <span>{challenge.amountSats} sats</span>}
+                  </div>
+                  <div className="mt-2 flex items-center gap-2">
+                    <span className="truncate font-mono text-sm font-bold tracking-wide text-amber-300">
+                      {challenge.id}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => void shareChallenge(challenge)}
+                      className="flex shrink-0 items-center gap-1 rounded-lg bg-stone-700 px-2 py-1 text-[11px] font-semibold text-white transition-colors hover:bg-stone-600"
+                    >
+                      {copiedChallengeId === challenge.id ? <Check size={12} /> : <Copy size={12} />}
+                      {copiedChallengeId === challenge.id ? 'Copiado' : 'Copiar'}
+                    </button>
                   </div>
                 </div>
                 <div className="flex flex-col items-end justify-between gap-1.5">
