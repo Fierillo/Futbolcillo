@@ -263,10 +263,10 @@ export default function TejoCanvas({ gameState, onMouseDown, onMouseMove, onMous
       const alpha = Math.min(1, gameState.messageTimer / 20);
       ctx.globalAlpha = alpha;
       ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
-      ctx.fillRect(0, h / 2 - 50, w, 100);
+      ctx.fillRect(0, h / 2 - 30, w, 60);
 
       ctx.fillStyle = '#fbbf24';
-      ctx.font = 'bold 42px sans-serif';
+      ctx.font = 'bold 24px sans-serif';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillText(gameState.message, w / 2, h / 2);
