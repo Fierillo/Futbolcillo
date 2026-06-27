@@ -8,7 +8,8 @@ export type ChallengeState =
   | 'rejected'
   | 'expired'
   | 'cancelled'
-  | 'finalized';
+  | 'finalized'
+  | 'terminated';
 
 export type ChallengeDirection = 'outgoing' | 'incoming';
 

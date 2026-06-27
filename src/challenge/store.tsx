@@ -102,7 +102,7 @@ function normalizePubkey(input: string, profiles: CachedProfile[]) {
 }
 
 function isFinishedState(state: ChallengeState) {
-  return state === 'rejected' || state === 'expired' || state === 'cancelled' || state === 'finalized';
+  return state === 'rejected' || state === 'expired' || state === 'cancelled' || state === 'finalized' || state === 'terminated';
 }
 
 async function sendChallengeDirectMessage(
@@ -733,6 +733,10 @@ export function ChallengeProvider({ children }: { children: ReactNode }) {
     setActiveChallenge(challenge);
   }, []);
 
+  const clearActiveChallenge = useCallback(() => {
+    setActiveChallenge(null);
+  }, []);
+
   const pendingIncomingCount = useMemo(() => {
     return challenges.filter(
       (challenge) => challenge.direction === 'incoming' && challenge.state === 'received'
@@ -779,12 +783,13 @@ export function ChallengeProvider({ children }: { children: ReactNode }) {
       rejectLinkedChallenge,
       acceptIncomingChallenge,
       enterAcceptedChallenge,
+      clearActiveChallenge,
       challengeError,
       clearChallengeError,
       selectedFilter,
       setSelectedFilter,
     }),
-    [filteredChallenges, recentRivals, followingRivals, rivalMatches, rivalProfiles, linkedChallenge, activeChallenge, activeChallengeId, pendingIncomingCount, draft, setDraft, selectRival, createChallenge, refreshChallenges, loadLinkedChallenge, acceptLinkedChallenge, rejectLinkedChallenge, acceptIncomingChallenge, enterAcceptedChallenge, challengeError, clearChallengeError, selectedFilter]
+    [filteredChallenges, recentRivals, followingRivals, rivalMatches, rivalProfiles, linkedChallenge, activeChallenge, activeChallengeId, pendingIncomingCount, draft, setDraft, selectRival, createChallenge, refreshChallenges, loadLinkedChallenge, acceptLinkedChallenge, rejectLinkedChallenge, acceptIncomingChallenge, enterAcceptedChallenge, clearActiveChallenge, challengeError, clearChallengeError, selectedFilter]
   );
 
   return <ChallengeContext.Provider value={value}>{children}</ChallengeContext.Provider>;

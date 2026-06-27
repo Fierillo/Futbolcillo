@@ -30,7 +30,7 @@ function formatRemaining(expirationAt: number) {
 }
 
 function isFinishedState(state: string) {
-  return state === 'rejected' || state === 'expired' || state === 'cancelled' || state === 'finalized';
+  return state === 'rejected' || state === 'expired' || state === 'cancelled' || state === 'finalized' || state === 'terminated';
 }
 
 function ChallengeActionButton({
