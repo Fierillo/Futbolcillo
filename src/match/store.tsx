@@ -10,6 +10,8 @@ type ActiveMatch = {
   state: MatchState;
   rematchRequestedBy?: string | null;
   rematchMatchId?: string | null;
+  rematchRejectedBy?: string | null;
+  terminatedBy?: string | null;
 };
 
 interface MatchContextValue {
@@ -25,6 +27,7 @@ interface MatchContextValue {
   submitShot: (playerIndex: number, velX: number, velY: number) => Promise<void>;
   requestRematch: (requesterPubkey: string) => Promise<void>;
   acceptRematch: (accepterPubkey: string) => Promise<void>;
+  rejectRematch: (rejecterPubkey: string) => Promise<void>;
   clearMatch: () => void;
   refreshMatchState: () => Promise<void>;
   finishShotAnimation: () => void;
@@ -104,6 +107,26 @@ export function MatchProvider({ children }: { children: ReactNode }) {
     const poll = async () => {
       const match = await fetchMatchState(activeMatchId);
       if (!match) return;
+
+      if (match.status === 'terminated') {
+        setActiveMatchMeta(match);
+        setMatchState(match.state);
+        if (pollRef.current) {
+          clearInterval(pollRef.current);
+          pollRef.current = null;
+        }
+        return;
+      }
+
+      if (match.status === 'finished' && !match.rematchMatchId) {
+        setActiveMatchMeta(match);
+        setMatchState(match.state);
+        if (pollRef.current) {
+          clearInterval(pollRef.current);
+          pollRef.current = null;
+        }
+        return;
+      }
 
       if (match.rematchMatchId && match.rematchMatchId !== activeMatchId) {
         setActiveMatchId(match.rematchMatchId);
@@ -291,6 +314,29 @@ export function MatchProvider({ children }: { children: ReactNode }) {
     }
   }, [activeMatchId, activeMatchMeta, refreshMatchState]);
 
+  const rejectRematch = useCallback(async (rejecterPubkey: string) => {
+    if (!activeMatchId || !activeMatchMeta || !matchStateRef.current || !rejecterPubkey) return;
+    setIsSubmittingRematch(true);
+    setMatchError('');
+    try {
+      const res = await fetch('/api/matches/rematch-reject', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ matchId: activeMatchId, rejecterPubkey }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) {
+        setMatchError(data.error || 'No se pudo rechazar la revancha.');
+        return;
+      }
+      await refreshMatchState();
+    } catch {
+      setMatchError('No se pudo conectar con el servidor.');
+    } finally {
+      setIsSubmittingRematch(false);
+    }
+  }, [activeMatchId, activeMatchMeta, refreshMatchState]);
+
   const value = {
     activeMatchId,
     activeMatchMeta,
@@ -304,6 +350,7 @@ export function MatchProvider({ children }: { children: ReactNode }) {
     submitShot,
     requestRematch,
     acceptRematch,
+    rejectRematch,
     clearMatch,
     refreshMatchState,
     finishShotAnimation,

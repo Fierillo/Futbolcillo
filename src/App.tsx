@@ -36,9 +36,37 @@ export default function App() {
   const containerRef = useRef<HTMLDivElement>(null);
   const { setSyncState } = useSyncStatus();
   const { session, refreshProfile } = useNostrSession();
-  const { activeChallenge, pendingIncomingCount } = useChallengeStore();
+  const { activeChallenge, pendingIncomingCount, clearActiveChallenge } = useChallengeStore();
   const { activeMatchId, activeMatchMeta, matchState, matchError, isCreatingMatch, isAnimatingShot, pendingShotAnimation, isSubmittingRematch, createMatch, submitShot, requestRematch, acceptRematch, clearMatch, finishShotAnimation } = useMatchStore();
   const localTeam = activeChallenge?.direction === 'incoming' ? 'away' : activeChallenge?.direction === 'outgoing' ? 'home' : null;
+  const localPubkey = session.profile?.pubkey || '';
+
+  const terminateMatch = useCallback(async () => {
+    if (!activeMatchId || !localPubkey) return;
+    try {
+      await fetch('/api/matches/terminate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ matchId: activeMatchId, terminatedBy: localPubkey }),
+      });
+    } catch {
+      // ignore
+    }
+    // Mark challenge as terminated in local cache
+    if (activeChallenge?.id) {
+      try {
+        await cacheDb.challenges.update(activeChallenge.id, {
+          state: 'terminated',
+          updatedAt: Date.now(),
+        });
+      } catch {
+        // ignore
+      }
+    }
+    clearMatch();
+    clearActiveChallenge();
+    setGameState(createInitialState());
+  }, [activeMatchId, localPubkey, activeChallenge, clearMatch, clearActiveChallenge]);
 
   usePhaseOneBoot();
 
@@ -211,7 +239,7 @@ export default function App() {
   const shotInitializedRef = useRef(false);
 
   useEffect(() => {
-    if (activeMatchId && !isAnimatingShot && gameState.messageTimer <= 0 && gameState.cameraShake <= 0) {
+    if (activeMatchId && !isAnimatingShot && gameState.messageTimer <= 0 && gameState.cameraShake <= 0 && !gameState.winner) {
       shotInitializedRef.current = false;
       return;
     }
@@ -442,7 +470,6 @@ export default function App() {
     : activeChallenge?.direction === 'incoming'
       ? session.profile?.name || 'Local'
       : 'Máquina';
-  const localPubkey = session.profile?.pubkey || '';
 
   const turnText = activeChallenge
     ? gameState.turn === 'home'
@@ -484,6 +511,11 @@ export default function App() {
   const localWon = Boolean(activeChallenge && localTeam && gameState.winner && localTeam === gameState.winner);
   const rematchRequestedBy = activeMatchMeta?.rematchRequestedBy || null;
   const rematchMatchId = activeMatchMeta?.rematchMatchId || null;
+  const rematchRejectedBy = activeMatchMeta?.rematchRejectedBy || null;
+  const terminatedBy = activeMatchMeta?.terminatedBy || null;
+  const terminatedBySelf = Boolean(localPubkey && terminatedBy === localPubkey);
+  const terminatedByOther = Boolean(terminatedBy && localPubkey && terminatedBy !== localPubkey);
+  const terminatorName = terminatedBy === homeIdentity?.pubkey ? homeAlias : terminatedBy === awayIdentity?.pubkey ? awayAlias : 'El rival';
   const rematchRequestedBySelf = Boolean(localPubkey && rematchRequestedBy === localPubkey);
   const rematchRequestedByOther = Boolean(rematchRequestedBy && localPubkey && rematchRequestedBy !== localPubkey);
   const rematchRequesterName = rematchRequestedBy === homeIdentity?.pubkey ? homeAlias : rematchRequestedBy === awayIdentity?.pubkey ? awayAlias : 'El rival';
@@ -674,9 +706,26 @@ export default function App() {
               </button>
             ) : (
               <div className="space-y-3">
-                {rematchMatchId ? (
+                {terminatedByOther ? (
+                  <div className="space-y-3">
+                    <div className="rounded-lg bg-stone-900/60 px-4 py-3 text-sm text-stone-300">
+                      {terminatorName} terminó la partida.
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => { clearMatch(); setGameState(createInitialState()); }}
+                      className="w-full px-6 py-3 bg-stone-700 hover:bg-stone-600 rounded-lg font-bold transition-colors"
+                    >
+                      Terminar desafió
+                    </button>
+                  </div>
+                ) : rematchMatchId ? (
                   <div className="rounded-lg bg-stone-900/60 px-4 py-3 text-sm text-stone-300">
                     Armando revancha...
+                  </div>
+                ) : rematchRejectedBy ? (
+                  <div className="rounded-lg bg-stone-900/60 px-4 py-3 text-sm text-stone-300">
+                    El rival no quiere jugar de vuelta.
                   </div>
                 ) : rematchRequestedByOther ? (
                   <>
@@ -705,15 +754,39 @@ export default function App() {
                   </button>
                 )}
 
-                <button
-                  type="button"
-                  onClick={clearMatch}
-                  className="w-full px-6 py-3 bg-stone-700 hover:bg-stone-600 rounded-lg font-bold transition-colors"
-                >
-                  Terminar partida
-                </button>
+                {!terminatedBy && (
+                  <button
+                    type="button"
+                    onClick={() => void terminateMatch()}
+                    className="w-full px-6 py-3 bg-stone-700 hover:bg-stone-600 rounded-lg font-bold transition-colors"
+                  >
+                    Terminar partida
+                  </button>
+                )}
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Terminated match overlay (when no winner but match was terminated by other player) */}
+      {!gameState.winner && terminatedByOther && activeChallenge && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
+          <div className="bg-stone-800 rounded-2xl p-8 text-center shadow-2xl max-w-sm mx-4 border border-stone-700">
+            <Trophy size={64} className="mx-auto mb-4 text-stone-400" />
+            <h2 className="text-3xl font-bold mb-2 text-stone-300">
+              PARTIDA TERMINADA
+            </h2>
+            <p className="text-stone-400 mb-6">
+              {terminatorName} terminó la partida.
+            </p>
+            <button
+              type="button"
+              onClick={() => { clearMatch(); clearActiveChallenge(); setGameState(createInitialState()); }}
+              className="w-full px-6 py-3 bg-stone-700 hover:bg-stone-600 rounded-lg font-bold transition-colors"
+            >
+              Volver al entrenamiento
+            </button>
           </div>
         </div>
       )}

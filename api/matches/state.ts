@@ -23,9 +23,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       current_state: string;
       rematch_requested_by: string | null;
       rematch_match_id: string | null;
+      rematch_rejected_by: string | null;
+      terminated_by: string | null;
       updated_at: string;
     }>`
-      select id, status, home_pubkey, away_pubkey, current_state::text, rematch_requested_by, rematch_match_id, updated_at::text
+      select id, status, home_pubkey, away_pubkey, current_state::text, rematch_requested_by, rematch_match_id, rematch_rejected_by, terminated_by, updated_at::text
       from matches
       where id = ${matchId}
       limit 1
@@ -60,6 +62,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         state,
         rematchRequestedBy: match.rematch_requested_by,
         rematchMatchId: match.rematch_match_id,
+        rematchRejectedBy: match.rematch_rejected_by,
+        terminatedBy: match.terminated_by,
         updatedAt: match.updated_at,
       },
     });
