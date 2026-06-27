@@ -249,6 +249,7 @@ export function NostrSessionProvider({ children }: { children: ReactNode }) {
 
     try {
       const ndk = getNostrClient();
+      await ndk.connect(3000);
       const signer = NDKNip46Signer.bunker(ndk, token);
       ndk.signer = signer;
       const user = await withTimeout(signer.user(), 12000);
@@ -267,6 +268,7 @@ export function NostrSessionProvider({ children }: { children: ReactNode }) {
 
   const startBunkerQr = useCallback(async () => {
     const ndk = getNostrClient();
+    await ndk.connect(3000);
     const signer = NDKNip46Signer.nostrconnect(ndk, NOSTR_CONNECT_RELAY);
     ndk.signer = signer;
     setPendingBunkerSigner(signer);
@@ -275,13 +277,34 @@ export function NostrSessionProvider({ children }: { children: ReactNode }) {
       throw new Error('No se pudo generar el enlace nostrconnect.');
     }
 
+    // Start waiting for connection automatically
+    const waitForConnection = async () => {
+      try {
+        const user = await withTimeout(signer.user(), 300000);
+        const signerPayload = signer.toPayload();
+        await setConnectedSession(user.pubkey, 'bunker', ndk, signerPayload);
+        setPendingBunkerSigner(null);
+      } catch (error) {
+        setSession((prev) => ({
+          ...prev,
+          status: 'error',
+          method: 'bunker',
+          error: error instanceof Error ? error.message : 'No se pudo conectar con QR.',
+        }));
+        setPendingBunkerSigner(null);
+      }
+    };
+
+    void waitForConnection();
+
     return {
       uri: signer.nostrConnectUri,
       relay: NOSTR_CONNECT_RELAY,
     };
-  }, []);
+  }, [setConnectedSession]);
 
   const finishBunkerQr = useCallback(async () => {
+    // Kept for backward compatibility but no longer needed
     if (!pendingBunkerSigner) {
       throw new Error('No hay una sesión QR pendiente.');
     }

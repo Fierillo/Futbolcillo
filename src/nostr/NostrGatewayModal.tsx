@@ -90,17 +90,6 @@ export function NostrGatewayModal({ onClose, linkedChallengeId = '', linkedChall
     }
   };
 
-  const handleFinishQr = async () => {
-    setQrLoading(true);
-    try {
-      await finishBunkerQr();
-      setShowQr(false);
-      setQrUri('');
-    } finally {
-      setQrLoading(false);
-    }
-  };
-
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 px-2 sm:px-4">
       <div className="max-h-[calc(100vh-1rem)] w-full max-w-2xl overflow-y-auto rounded-2xl sm:rounded-3xl border border-stone-700 bg-stone-900 p-3 sm:p-4 shadow-2xl">
@@ -295,15 +284,7 @@ export function NostrGatewayModal({ onClose, linkedChallengeId = '', linkedChall
                   {showQr && bunkerQrUrl && (
                     <div className="mt-3 flex flex-col items-center rounded-2xl border border-stone-700 bg-stone-950/70 p-3">
                       <img src={bunkerQrUrl} alt="QR para bunker" className="h-44 w-44 rounded-xl bg-white p-2" />
-                      <p className="mt-2 text-center text-xs text-stone-500">Escaneá desde tu signer remoto y después confirmá la conexión.</p>
-                      <button
-                        type="button"
-                        onClick={() => void handleFinishQr()}
-                        disabled={qrLoading}
-                        className="mt-3 rounded-lg bg-emerald-700 px-3 py-2 text-sm font-semibold text-white transition-colors hover:bg-emerald-600 disabled:cursor-not-allowed disabled:opacity-60"
-                      >
-                        {qrLoading ? 'Esperando conexión...' : 'Ya escaneé, conectar'}
-                      </button>
+                      <p className="mt-2 text-center text-xs text-stone-500">Escaneá desde tu signer remoto. La conexión se completará automáticamente.</p>
                     </div>
                   )}
                 </div>
