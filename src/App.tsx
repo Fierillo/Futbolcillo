@@ -44,10 +44,10 @@ export default function App() {
   const terminateMatch = useCallback(async () => {
     if (!activeMatchId || !localPubkey) return;
     try {
-      await fetch('/api/matches/terminate', {
+      await fetch('/api/matches/control', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ matchId: activeMatchId, terminatedBy: localPubkey }),
+        body: JSON.stringify({ action: 'terminate', matchId: activeMatchId, terminatedBy: localPubkey }),
       });
     } catch {
       // ignore

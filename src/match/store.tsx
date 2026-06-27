@@ -269,10 +269,10 @@ export function MatchProvider({ children }: { children: ReactNode }) {
     setIsSubmittingRematch(true);
     setMatchError('');
     try {
-      const res = await fetch('/api/matches/rematch-request', {
+      const res = await fetch('/api/matches/control', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ matchId: activeMatchId, requesterPubkey }),
+        body: JSON.stringify({ action: 'rematch-request', matchId: activeMatchId, requesterPubkey }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.ok) {
@@ -296,10 +296,10 @@ export function MatchProvider({ children }: { children: ReactNode }) {
     setIsSubmittingRematch(true);
     setMatchError('');
     try {
-      const res = await fetch('/api/matches/rematch-accept', {
+      const res = await fetch('/api/matches/control', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ matchId: activeMatchId, accepterPubkey }),
+        body: JSON.stringify({ action: 'rematch-accept', matchId: activeMatchId, accepterPubkey }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.ok) {
@@ -319,10 +319,10 @@ export function MatchProvider({ children }: { children: ReactNode }) {
     setIsSubmittingRematch(true);
     setMatchError('');
     try {
-      const res = await fetch('/api/matches/rematch-reject', {
+      const res = await fetch('/api/matches/control', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ matchId: activeMatchId, rejecterPubkey }),
+        body: JSON.stringify({ action: 'rematch-reject', matchId: activeMatchId, rejecterPubkey }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.ok) {
