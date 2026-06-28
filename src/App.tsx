@@ -31,10 +31,12 @@ export default function App() {
   const [muted, setMuted] = useState(false);
   const [scale, setScale] = useState(1);
   const [isMobilePortrait, setIsMobilePortrait] = useState(false);
+  const [terminationNotice, setTerminationNotice] = useState('');
   const gameStateRef = useRef<GameState>(gameState);
   const previousPhaseRef = useRef<GameState['phase']>(gameState.phase);
   const animFrameRef = useRef<number>(0);
   const containerRef = useRef<HTMLDivElement>(null);
+  const lastHandledTerminationRef = useRef<string | null>(null);
   const { setSyncState } = useSyncStatus();
   const { session, refreshProfile } = useNostrSession();
   const { activeChallenge, pendingIncomingCount, clearActiveChallenge } = useChallengeStore();
@@ -117,6 +119,43 @@ export default function App() {
     if (!activeMatchId) return;
     setShowNostrGateway(false);
   }, [activeMatchId]);
+
+  useEffect(() => {
+    if (activeMatchId) {
+      lastHandledTerminationRef.current = null;
+    }
+  }, [activeMatchId]);
+
+  useEffect(() => {
+    if (!activeMatchId || !activeMatchMeta || activeMatchMeta.status !== 'terminated') return;
+    if (lastHandledTerminationRef.current === activeMatchId) return;
+    lastHandledTerminationRef.current = activeMatchId;
+
+    const notice = activeMatchMeta.terminatedBy === localPubkey
+      ? 'Terminaste la partida.'
+      : 'El rival terminó la partida.';
+
+    const terminateLocally = async () => {
+      if (activeChallenge?.id) {
+        try {
+          await cacheDb.challenges.update(activeChallenge.id, {
+            state: 'terminated',
+            updatedAt: Date.now(),
+          });
+        } catch {
+          // ignore
+        }
+      }
+
+      clearMatch();
+      clearActiveChallenge();
+      setGameState(createInitialState());
+      setTerminationNotice(notice);
+      window.setTimeout(() => setTerminationNotice(''), 3000);
+    };
+
+    void terminateLocally();
+  }, [activeMatchId, activeMatchMeta, activeChallenge, localPubkey, clearMatch, clearActiveChallenge]);
 
   // Fetch rival Nostr profile for avatar when match starts
   const [rivalAvatarUrl, setRivalAvatarUrl] = useState<string | null>(null);
@@ -686,6 +725,14 @@ export default function App() {
             >
               Cerrar
             </button>
+          </div>
+        </div>
+      )}
+
+      {terminationNotice && (
+        <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 max-w-md">
+          <div className="rounded-xl border border-stone-700 bg-stone-900/95 px-4 py-3 text-sm text-stone-200 shadow-2xl">
+            {terminationNotice}
           </div>
         </div>
       )}
