@@ -114,7 +114,7 @@ export function ChallengeHistoryPanel({ onAction }: Props) {
   const [copiedChallengeId, setCopiedChallengeId] = useState<string | null>(null);
 
   const shareChallenge = async (challenge: CachedChallenge) => {
-    const challengeUrl = `${getPublicAppUrl()}?challenge=${challenge.id}&token=${challenge.accessToken}`;
+    const challengeUrl = `${getPublicAppUrl()}?challenge=${challenge.id}&token=${challenge.accessToken}&owner=${challenge.sourceOwnerPubkey || challenge.ownerPubkey}`;
 
     if (navigator.share) {
       try {

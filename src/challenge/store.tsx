@@ -30,7 +30,7 @@ interface ChallengeContextValue {
   selectRival: (profile: CachedProfile) => void;
   createChallenge: () => Promise<void>;
   refreshChallenges: () => Promise<void>;
-  loadLinkedChallenge: (challengeId: string, token: string) => Promise<void>;
+  loadLinkedChallenge: (challengeId: string, token: string, ownerHint?: string) => Promise<void>;
   acceptLinkedChallenge: () => Promise<void>;
   rejectLinkedChallenge: () => Promise<void>;
   acceptIncomingChallenge: (challenge: CachedChallenge) => Promise<void>;
@@ -113,7 +113,7 @@ async function sendChallengeDirectMessage(
 ) {
   const recipient = ndk.getUser({ pubkey: challenge.rivalPubkey });
   const siteUrl = getPublicAppUrl();
-  const challengeUrl = `${siteUrl}?challenge=${challenge.id}&token=${challenge.accessToken}`;
+  const challengeUrl = `${siteUrl}?challenge=${challenge.id}&token=${challenge.accessToken}&owner=${ownerPubkey}`;
   const message =
     challenge.mode === 'wager'
       ? [
@@ -258,6 +258,7 @@ export function ChallengeProvider({ children }: { children: ReactNode }) {
                 id: c.id,
                 accessToken: c.accessToken,
                 ownerPubkey: c.ownerPubkey,
+                sourceOwnerPubkey: c.ownerPubkey,
                 direction: 'outgoing',
                 mode: c.mode as ChallengeMode,
                 state: c.state as ChallengeState,
@@ -280,6 +281,7 @@ export function ChallengeProvider({ children }: { children: ReactNode }) {
                 id: c.id,
                 accessToken: c.accessToken,
                 ownerPubkey: session.pubkey,
+                sourceOwnerPubkey: c.ownerPubkey,
                 direction: 'incoming',
                 mode: c.mode as ChallengeMode,
                 state: c.state as ChallengeState,
@@ -380,6 +382,7 @@ export function ChallengeProvider({ children }: { children: ReactNode }) {
             id: payload.challengeId,
             accessToken: payload.accessToken,
             ownerPubkey: session.pubkey,
+            sourceOwnerPubkey: senderPubkey,
             direction: 'incoming',
             mode: payload.mode,
             state: 'received',
@@ -532,7 +535,7 @@ export function ChallengeProvider({ children }: { children: ReactNode }) {
 
   const clearChallengeError = useCallback(() => setChallengeError(''), []);
 
-  const loadLinkedChallenge = useCallback(async (challengeId: string, token: string) => {
+  const loadLinkedChallenge = useCallback(async (challengeId: string, token: string, ownerHint = '') => {
     if (!challengeId || !token || !session.pubkey) {
       setLinkedChallenge(null);
       return;
@@ -540,7 +543,13 @@ export function ChallengeProvider({ children }: { children: ReactNode }) {
 
     const cachedChallenge = await cacheDb.challenges.get(challengeId);
     if (cachedChallenge && cachedChallenge.accessToken === token) {
-      setLinkedChallenge(cachedChallenge);
+      const normalizedCached = ownerHint && !cachedChallenge.sourceOwnerPubkey
+        ? { ...cachedChallenge, sourceOwnerPubkey: ownerHint }
+        : cachedChallenge;
+      if (normalizedCached !== cachedChallenge) {
+        await cacheDb.challenges.put(normalizedCached);
+      }
+      setLinkedChallenge(normalizedCached);
       setChallengeError('');
       return;
     }
@@ -571,6 +580,7 @@ export function ChallengeProvider({ children }: { children: ReactNode }) {
           id: challenge.id,
           accessToken: challenge.accessToken,
           ownerPubkey: session.pubkey,
+          sourceOwnerPubkey: challenge.ownerPubkey,
           direction: isOwner ? 'outgoing' : 'incoming',
           mode: challenge.mode,
           state: challenge.state,
@@ -593,11 +603,12 @@ export function ChallengeProvider({ children }: { children: ReactNode }) {
         id: challengeId,
         accessToken: token,
         ownerPubkey: session.pubkey,
+        sourceOwnerPubkey: ownerHint || '',
         direction: 'incoming',
         mode: 'friendly',
         state: 'received',
-        rivalPubkey: '',
-        rivalName: 'Desconocido',
+        rivalPubkey: ownerHint || '',
+        rivalName: ownerHint ? `Rival ${ownerHint.slice(0, 8)}` : 'Desconocido',
         amountSats: 0,
         expirationAt: Date.now() + 24 * 60 * 60 * 1000,
         createdAt: Date.now(),
@@ -629,7 +640,7 @@ export function ChallengeProvider({ children }: { children: ReactNode }) {
             challengeId: linkedChallenge.id,
             accessToken: linkedChallenge.accessToken,
             rivalPubkey: session.pubkey,
-            ownerPubkey: linkedChallenge.ownerPubkey,
+            ownerPubkey: linkedChallenge.sourceOwnerPubkey || linkedChallenge.ownerPubkey,
             mode: linkedChallenge.mode,
             amountSats: linkedChallenge.amountSats,
             expiresAt: new Date(linkedChallenge.expirationAt).toISOString(),
@@ -694,7 +705,7 @@ export function ChallengeProvider({ children }: { children: ReactNode }) {
             challengeId: challenge.id,
             accessToken: challenge.accessToken,
             rivalPubkey: session.pubkey,
-            ownerPubkey: challenge.ownerPubkey,
+            ownerPubkey: challenge.sourceOwnerPubkey || challenge.ownerPubkey,
             mode: challenge.mode,
             amountSats: challenge.amountSats,
             expiresAt: new Date(challenge.expirationAt).toISOString(),

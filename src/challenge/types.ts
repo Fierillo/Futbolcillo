@@ -17,6 +17,7 @@ export interface CachedChallenge {
   id: string;
   accessToken: string;
   ownerPubkey: string;
+  sourceOwnerPubkey?: string;
   direction: ChallengeDirection;
   mode: ChallengeMode;
   state: ChallengeState;

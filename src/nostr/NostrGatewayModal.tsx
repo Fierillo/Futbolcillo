@@ -11,6 +11,7 @@ interface Props {
   onClose: () => void;
   linkedChallengeId?: string;
   linkedChallengeToken?: string;
+  linkedChallengeOwner?: string;
   matchError?: string;
   isCreatingMatch?: boolean;
 }
@@ -32,7 +33,7 @@ const features: NostrFeatureCard[] = [
 
 type ModalStep = 'intro' | 'connect' | 'received' | 'invite';
 
-export function NostrGatewayModal({ onClose, linkedChallengeId = '', linkedChallengeToken = '', matchError = '', isCreatingMatch = false }: Props) {
+export function NostrGatewayModal({ onClose, linkedChallengeId = '', linkedChallengeToken = '', linkedChallengeOwner = '', matchError = '', isCreatingMatch = false }: Props) {
   const hasLinkedChallenge = Boolean(linkedChallengeId && linkedChallengeToken);
   const [bunkerToken, setBunkerToken] = useState('');
   const [showQr, setShowQr] = useState(false);
@@ -76,8 +77,8 @@ export function NostrGatewayModal({ onClose, linkedChallengeId = '', linkedChall
 
   useEffect(() => {
     if (session.status !== 'connected' || !linkedChallengeId || !linkedChallengeToken) return;
-    void loadLinkedChallenge(linkedChallengeId, linkedChallengeToken);
-  }, [session.status, linkedChallengeId, linkedChallengeToken, loadLinkedChallenge]);
+    void loadLinkedChallenge(linkedChallengeId, linkedChallengeToken, linkedChallengeOwner);
+  }, [session.status, linkedChallengeId, linkedChallengeToken, linkedChallengeOwner, loadLinkedChallenge]);
 
   const handleCreateQr = async () => {
     setQrLoading(true);

@@ -27,6 +27,7 @@ export default function App() {
   const [showNostrGateway, setShowNostrGateway] = useState(false);
   const [linkedChallengeId, setLinkedChallengeId] = useState('');
   const [linkedChallengeToken, setLinkedChallengeToken] = useState('');
+  const [linkedChallengeOwner, setLinkedChallengeOwner] = useState('');
   const [muted, setMuted] = useState(false);
   const [scale, setScale] = useState(1);
   const [isMobilePortrait, setIsMobilePortrait] = useState(false);
@@ -84,10 +85,12 @@ export default function App() {
     const params = new URLSearchParams(window.location.search);
     const challengeId = params.get('challenge') || '';
     const challengeToken = params.get('token') || '';
+    const challengeOwner = params.get('owner') || '';
     if (!challengeId || !challengeToken) return;
 
     setLinkedChallengeId(challengeId);
     setLinkedChallengeToken(challengeToken);
+    setLinkedChallengeOwner(challengeOwner);
     setShowNostrGateway(true);
   }, []);
 
@@ -635,6 +638,7 @@ export default function App() {
         <NostrGatewayModal
           linkedChallengeId={linkedChallengeId}
           linkedChallengeToken={linkedChallengeToken}
+          linkedChallengeOwner={linkedChallengeOwner}
           matchError={matchError}
           isCreatingMatch={isCreatingMatch}
           onClose={() => setShowNostrGateway(false)}
