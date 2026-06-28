@@ -10,33 +10,33 @@ Futbolcillo is a turn-based football game built with `React + TypeScript + Canva
 
 ## Roadmap
 
-- [x] Modo entrenamiento local jugable
-- [x] Campo de fútbol con física por turnos
-- [x] Guía de tiro con flecha
-- [x] Primero a 3 goles
-- [x] Sistema de faltas con turnos extra y goles anulados
-- [x] Overlays de gol / falta / ganador
-- [x] Layout mobile portrait con campo rotado
-- [x] Login Nostr con NIP-07 y bunker
-- [x] QR para conexión bunker / nostrconnect
-- [x] Perfil y avatar de rival desde Nostr
-- [x] Desafíos vía DM con link seguro
-- [x] Historial de desafíos con filtros
-- [x] Persistencia local con Dexie
-- [x] Match online server-authoritative en Vercel + Neon
-- [x] Shot submission y validación en servidor
-- [x] Replay metadata para animación de tiros
+- [x] Local training mode ready to play
+- [x] Football pitch with turn-based physics
+- [x] Arrow-based shot guide
+- [x] First to 3 goals wins
+- [x] Foul system with bonus turns and disallowed goals
+- [x] Goal / foul / winner overlays
+- [x] Mobile portrait layout with rotated field
+- [x] Nostr login with NIP-07 and bunker
+- [x] QR-based bunker / nostrconnect flow
+- [x] Rival profile and avatar from Nostr
+- [x] Challenges via DM with secure link
+- [x] Challenge history with filters
+- [x] Local persistence with Dexie
+- [x] Online match server-authoritative on Vercel + Neon
+- [x] Shot submission and validation on server
+- [x] Replay metadata for shot animation
 - [x] Rematch request / accept / reject
-- [x] Terminación explícita de match
-- [x] Schema bootstrap y endpoints consolidados (10 functions)
-- [ ] Sonidos y presentación visual mejorada
-- [ ] Resiliencia Nostr ante relays inestables
-- [ ] UX de estados de desafío y limpieza de flujos
-- [ ] Hardening de sincronización online en sesiones largas
-- [ ] Diagnósticos de sync visibles para el jugador
-- [ ] Rate limiting y controles de abuso
-- [ ] Panel de recuperación para sesiones online interrumpidas
-- [ ] Wager/escrow en sats y payout server-controlled
+- [x] Explicit match termination flow
+- [x] Schema bootstrap and consolidated endpoints (10 functions)
+- [ ] Sound effects and richer match presentation
+- [ ] Nostr resilience across flaky relays
+- [ ] Challenge status UX and cleanup flows
+- [ ] Sync hardening for long online sessions
+- [ ] Player-facing sync diagnostics
+- [ ] Rate limiting and abuse controls
+- [ ] Recovery panel for interrupted online sessions
+- [ ] Wager / escrow in sats and server-controlled payout
 
 ## How to Play
 
