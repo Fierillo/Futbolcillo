@@ -10,67 +10,33 @@ Futbolcillo is a turn-based football game built with `React + TypeScript + Canva
 
 ## Roadmap
 
-### Core Game
-
-- [x] local training mode ready to play
-- [x] football-style pitch with turn-based physics
-- [x] arrow-based shot guide
-- [x] first to `3` goals wins
-- [x] foul system with bonus turns and disallowed goals
-- [x] goal / foul / winner overlays and visual feedback
-- [x] mobile portrait layout with rotated field
-- [ ] sound effects and richer match presentation
-
-### Nostr Identity
-
-- [x] Nostr modal integrated into the game shell
-- [x] login with `NIP-07`
-- [x] login with bunker token
-- [x] QR-based bunker / `nostrconnect` flow
-- [x] automatic bunker QR connection after scan
-- [x] profile fetch, cache and refresh logic
-- [x] rival avatar fetch from Nostr profiles with local fallback
-- [ ] extra resilience across flaky relays and signer reconnect edge cases
-
-### Challenges
-
-- [x] create and receive challenges through Nostr DMs
-- [x] secure challenge links with token
-- [x] challenge acceptance from direct link
-- [x] challenge history with filters
-- [x] challenge short id copy/share flow
-- [x] challenge local persistence with `Dexie`
-- [x] terminated matches reflected as terminated challenges in history
-- [ ] richer challenge status UX and cleanup flows
-
-### Online Matches
-
-- [x] server-authoritative match creation on `Vercel + Neon`
-- [x] match state persistence in Neon
-- [x] shot submission and validation on the server
-- [x] replay metadata for online shot animation
-- [x] local + remote shot animation flow stabilized
-- [x] rematch request / accept flow
-- [x] rematch rejection flow
-- [x] explicit match termination flow
-- [ ] more hardening against replay / sync edge cases in long sessions
-- [ ] better player-facing sync diagnostics when divergence happens
-
-### Backend
-
-- [x] Neon connection and schema bootstrap
-- [x] auth / challenges / matches API structure
-- [x] defensive state parsing and error handling in match state endpoint
-- [x] rematch and terminate endpoints
-- [ ] rate limiting / abuse controls
-- [ ] richer server diagnostics and admin observability
-
-### Future Scope
-
-- [ ] real wager / escrow flow in sats
-- [ ] server-controlled wallet payout flow
-- [ ] recovery / continue panel for interrupted online sessions
-- [ ] websocket-based realtime transport if polling becomes limiting
+- [x] Modo entrenamiento local jugable
+- [x] Campo de fútbol con física por turnos
+- [x] Guía de tiro con flecha
+- [x] Primero a 3 goles
+- [x] Sistema de faltas con turnos extra y goles anulados
+- [x] Overlays de gol / falta / ganador
+- [x] Layout mobile portrait con campo rotado
+- [x] Login Nostr con NIP-07 y bunker
+- [x] QR para conexión bunker / nostrconnect
+- [x] Perfil y avatar de rival desde Nostr
+- [x] Desafíos vía DM con link seguro
+- [x] Historial de desafíos con filtros
+- [x] Persistencia local con Dexie
+- [x] Match online server-authoritative en Vercel + Neon
+- [x] Shot submission y validación en servidor
+- [x] Replay metadata para animación de tiros
+- [x] Rematch request / accept / reject
+- [x] Terminación explícita de match
+- [x] Schema bootstrap y endpoints consolidados (10 functions)
+- [ ] Sonidos y presentación visual mejorada
+- [ ] Resiliencia Nostr ante relays inestables
+- [ ] UX de estados de desafío y limpieza de flujos
+- [ ] Hardening de sincronización online en sesiones largas
+- [ ] Diagnósticos de sync visibles para el jugador
+- [ ] Rate limiting y controles de abuso
+- [ ] Panel de recuperación para sesiones online interrumpidas
+- [ ] Wager/escrow en sats y payout server-controlled
 
 ## How to Play
 
