@@ -13,6 +13,19 @@ interface Props {
 export default function TejoCanvas({ gameState, onMouseDown, onMouseMove, onMouseUp, scale, isRotated = false }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
+  const drawUprightText = useCallback((ctx: CanvasRenderingContext2D, text: string, x: number, y: number) => {
+    if (!isRotated) {
+      ctx.fillText(text, x, y);
+      return;
+    }
+
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(-Math.PI / 2);
+    ctx.fillText(text, 0, 0);
+    ctx.restore();
+  }, [isRotated]);
+
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -184,7 +197,7 @@ export default function TejoCanvas({ gameState, onMouseDown, onMouseMove, onMous
       ctx.font = `bold ${p.radius}px sans-serif`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText(String(p.number), p.pos.x, p.pos.y + 1);
+      drawUprightText(ctx, String(p.number), p.pos.x, p.pos.y + 1);
 
       // Selection glow
       if (p.isSelected) {
@@ -263,18 +276,33 @@ export default function TejoCanvas({ gameState, onMouseDown, onMouseMove, onMous
       const alpha = Math.min(1, gameState.messageTimer / 20);
       ctx.globalAlpha = alpha;
       ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
-      ctx.fillRect(0, h / 2 - 30, w, 60);
 
-      ctx.fillStyle = '#fbbf24';
-      ctx.font = 'bold 24px sans-serif';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(gameState.message, w / 2, h / 2);
+      if (isRotated) {
+        ctx.save();
+        ctx.translate(w / 2, h / 2);
+        ctx.rotate(-Math.PI / 2);
+        const boxWidth = Math.min(420, Math.max(220, gameState.message.length * 12));
+        ctx.fillRect(-boxWidth / 2, -30, boxWidth, 60);
+        ctx.fillStyle = '#fbbf24';
+        ctx.font = 'bold 24px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(gameState.message, 0, 0);
+        ctx.restore();
+      } else {
+        ctx.fillRect(0, h / 2 - 30, w, 60);
+        ctx.fillStyle = '#fbbf24';
+        ctx.font = 'bold 24px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(gameState.message, w / 2, h / 2);
+      }
+
       ctx.globalAlpha = 1;
     }
 
     ctx.restore();
-  }, [gameState]);
+  }, [drawUprightText, gameState, isRotated]);
 
   useEffect(() => {
     draw();
