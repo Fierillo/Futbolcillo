@@ -5,6 +5,7 @@ export type ChallengeState =
   | 'sent'
   | 'received'
   | 'accepted'
+  | 'in_match'
   | 'rejected'
   | 'expired'
   | 'cancelled'
@@ -27,6 +28,9 @@ export interface CachedChallenge {
   expirationAt: number;
   createdAt: number;
   updatedAt: number;
+  winnerPubkey?: string;
+  scoreHome?: number;
+  scoreAway?: number;
 }
 
 export type ChallengeFilter = 'all' | 'friendly' | 'wager' | 'pending' | 'finished';

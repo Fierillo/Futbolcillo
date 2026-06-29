@@ -17,6 +17,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const rows = await query<{
       id: string;
+      challenge_id: string;
       status: string;
       home_pubkey: string;
       away_pubkey: string;
@@ -27,7 +28,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       terminated_by: string | null;
       updated_at: string;
     }>`
-      select id, status, home_pubkey, away_pubkey, current_state::text, rematch_requested_by, rematch_match_id, rematch_rejected_by, terminated_by, updated_at::text
+      select id, challenge_id, status, home_pubkey, away_pubkey, current_state::text, rematch_requested_by, rematch_match_id, rematch_rejected_by, terminated_by, updated_at::text
       from matches
       where id = ${matchId}
       limit 1
@@ -56,6 +57,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       ok: true,
       match: {
         id: match.id,
+        challengeId: match.challenge_id,
         status: match.status,
         homePubkey: match.home_pubkey,
         awayPubkey: match.away_pubkey,

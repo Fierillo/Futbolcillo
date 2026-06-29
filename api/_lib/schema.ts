@@ -16,6 +16,9 @@ export function ensureSchema() {
     await query`alter table matches add column if not exists rematch_match_id text`;
     await query`alter table matches add column if not exists rematch_rejected_by text`;
     await query`alter table matches add column if not exists terminated_by text`;
+    await query`alter table challenges add column if not exists winner_pubkey text`;
+    await query`alter table challenges add column if not exists score_home integer`;
+    await query`alter table challenges add column if not exists score_away integer`;
     await query`create table if not exists match_shots (id bigserial primary key, match_id text not null, acting_pubkey text not null, payload jsonb not null, created_at timestamptz not null default now())`;
     await query`create table if not exists bets (id text primary key, challenge_id text not null, amount_sats integer not null, state text not null, created_at timestamptz not null default now(), updated_at timestamptz not null default now())`;
     await query`create table if not exists wallet_transactions (id text primary key, bet_id text, direction text not null, state text not null, amount_sats integer not null, metadata jsonb not null default '{}'::jsonb, created_at timestamptz not null default now())`;

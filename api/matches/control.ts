@@ -47,6 +47,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return;
     }
 
+    // Fetch original challenge for owner/rival info (used by rematch-accept)
+    const challengeRows = await query<{
+      id: string;
+      owner_pubkey: string;
+      rival_pubkey: string;
+      mode: string;
+      amount_sats: number;
+    }>`
+      select id, owner_pubkey, rival_pubkey, mode, amount_sats
+      from challenges
+      where id = ${match.challenge_id}
+      limit 1
+    `;
+    const originalChallenge = challengeRows[0];
+
     if (body.action === 'terminate') {
       const terminatedBy = body.terminatedBy || '';
       if (!terminatedBy) {
@@ -121,16 +136,32 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return;
       }
       if (match.rematch_match_id) {
-        res.status(200).json({ ok: true, matchId: match.rematch_match_id });
+        const existingRematch = await query<{ challenge_id: string }>`
+          select challenge_id from matches where id = ${match.rematch_match_id} limit 1
+        `;
+        res.status(200).json({ ok: true, matchId: match.rematch_match_id, challengeId: existingRematch[0]?.challenge_id || match.challenge_id });
         return;
       }
+
+      // Create a new challenge for the rematch
+      const rematchChallengeId = `rematch-${match.challenge_id}-${Date.now()}`;
+      const rematchAccessToken = Array.from(crypto.getRandomValues(new Uint8Array(18)), (b) => b.toString(16).padStart(2, '0')).join('');
+      const ownerPubkey = originalChallenge?.owner_pubkey || match.home_pubkey;
+      const rivalPubkey = originalChallenge?.rival_pubkey || match.away_pubkey;
+      const challengeMode = originalChallenge?.mode || match.mode;
+      const amountSats = originalChallenge?.amount_sats || 0;
+
+      await query`
+        insert into challenges (id, access_token, owner_pubkey, rival_pubkey, mode, state, amount_sats, expires_at)
+        values (${rematchChallengeId}, ${rematchAccessToken}, ${ownerPubkey}, ${rivalPubkey}, ${challengeMode}, 'in_match', ${amountSats}, now() + interval '24 hours')
+      `;
 
       const rematchId = `${match.id}-rematch-${Date.now()}`;
       const initialState = createInitialMatchState(match.home_pubkey, match.away_pubkey);
 
       await query`
         insert into matches (id, challenge_id, mode, status, home_pubkey, away_pubkey, current_state)
-        values (${rematchId}, ${match.challenge_id}, ${match.mode}, 'active', ${match.home_pubkey}, ${match.away_pubkey}, ${JSON.stringify(initialState)}::jsonb)
+        values (${rematchId}, ${rematchChallengeId}, ${match.mode}, 'active', ${match.home_pubkey}, ${match.away_pubkey}, ${JSON.stringify(initialState)}::jsonb)
       `;
 
       await query`
@@ -139,7 +170,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         where id = ${body.matchId}
       `;
 
-      res.status(200).json({ ok: true, matchId: rematchId });
+      res.status(200).json({ ok: true, matchId: rematchId, challengeId: rematchChallengeId });
       return;
     }
 

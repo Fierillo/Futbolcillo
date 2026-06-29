@@ -35,6 +35,11 @@ interface ChallengeContextValue {
   rejectLinkedChallenge: () => Promise<void>;
   acceptIncomingChallenge: (challenge: CachedChallenge) => Promise<void>;
   enterAcceptedChallenge: (challenge: CachedChallenge) => void;
+  clearActiveChallenge: () => void;
+  finalizeChallenge: (challengeId: string) => Promise<void>;
+  finalizeChallengeWithResult: (challengeId: string, winnerPubkey: string | null, scoreHome: number, scoreAway: number) => Promise<void>;
+  updateChallengeState: (challengeId: string, state: ChallengeState) => Promise<void>;
+  setActiveChallengeById: (challengeId: string) => Promise<void>;
   challengeError: string;
   clearChallengeError: () => void;
   selectedFilter: ChallengeFilter;
@@ -231,6 +236,9 @@ export function ChallengeProvider({ children }: { children: ReactNode }) {
             mode: string;
             state: string;
             amountSats: number;
+            winnerPubkey: string | null;
+            scoreHome: number | null;
+            scoreAway: number | null;
             expiresAt: string;
             createdAt: string;
             updatedAt: string;
@@ -243,6 +251,9 @@ export function ChallengeProvider({ children }: { children: ReactNode }) {
             mode: string;
             state: string;
             amountSats: number;
+            winnerPubkey: string | null;
+            scoreHome: number | null;
+            scoreAway: number | null;
             expiresAt: string;
             createdAt: string;
             updatedAt: string;
@@ -268,6 +279,9 @@ export function ChallengeProvider({ children }: { children: ReactNode }) {
                 expirationAt: new Date(c.expiresAt).getTime(),
                 createdAt: new Date(c.createdAt).getTime(),
                 updatedAt,
+                winnerPubkey: c.winnerPubkey || undefined,
+                scoreHome: c.scoreHome ?? undefined,
+                scoreAway: c.scoreAway ?? undefined,
               });
             }
           }
@@ -291,6 +305,9 @@ export function ChallengeProvider({ children }: { children: ReactNode }) {
                 expirationAt: new Date(c.expiresAt).getTime(),
                 createdAt: new Date(c.createdAt).getTime(),
                 updatedAt,
+                winnerPubkey: c.winnerPubkey || undefined,
+                scoreHome: c.scoreHome ?? undefined,
+                scoreAway: c.scoreAway ?? undefined,
               });
             }
           }
@@ -348,11 +365,30 @@ export function ChallengeProvider({ children }: { children: ReactNode }) {
     let stopped = false;
 
     const handleIncomingEvent = async (event: NDKEvent) => {
-      const rawPayload = event.tags.find((tag) => tag[0] === 'challenge')?.[1];
-      if (!rawPayload) return;
+      const rawChallengePayload = event.tags.find((tag) => tag[0] === 'challenge')?.[1];
+      const rawNotificationPayload = event.tags.find((tag) => tag[0] === 'match_notification')?.[1];
+
+      if (rawNotificationPayload) {
+        try {
+          const payload = JSON.parse(rawNotificationPayload) as {
+            type: string;
+            notificationType: string;
+            matchId: string;
+            message: string;
+          };
+          if (payload.type === 'futbolcillo_match_notification' && !stopped) {
+            await refreshChallenges();
+          }
+        } catch {
+          // Ignore malformed notifications.
+        }
+        return;
+      }
+
+      if (!rawChallengePayload) return;
 
       try {
-        const payload = JSON.parse(rawPayload) as {
+        const payload = JSON.parse(rawChallengePayload) as {
           type: string;
           challengeId: string;
           accessToken: string;
@@ -688,8 +724,24 @@ export function ChallengeProvider({ children }: { children: ReactNode }) {
     await cacheDb.challenges.put(nextChallenge);
     setLinkedChallenge(nextChallenge);
     setActiveChallenge(null);
+
+    try {
+      await fetch('/api/challenges/control', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'reject',
+          challengeId: linkedChallenge.id,
+          accessToken: linkedChallenge.accessToken,
+          pubkey: session.pubkey,
+        }),
+      }).catch(() => {});
+    } catch {
+      // ignore - local state already updated
+    }
+
     await refreshChallenges();
-  }, [linkedChallenge, refreshChallenges]);
+  }, [linkedChallenge, refreshChallenges, session.pubkey]);
 
   const acceptIncomingChallenge = useCallback(async (challenge: CachedChallenge) => {
     let alreadyInMatch = false;
@@ -744,6 +796,93 @@ export function ChallengeProvider({ children }: { children: ReactNode }) {
     setActiveChallenge(challenge);
   }, []);
 
+  const finalizeChallenge = useCallback(async (challengeId: string) => {
+    await cacheDb.challenges.update(challengeId, {
+      state: 'finalized',
+      updatedAt: Date.now(),
+    });
+    try {
+      await fetch('/api/challenges/control', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'finalize', challengeId }),
+      }).catch(() => {});
+    } catch {
+      // ignore
+    }
+    await refreshChallenges();
+  }, [refreshChallenges]);
+
+  const finalizeChallengeWithResult = useCallback(async (challengeId: string, winnerPubkey: string | null, scoreHome: number, scoreAway: number) => {
+    // Update local cache immediately
+    await cacheDb.challenges.update(challengeId, {
+      state: 'finalized',
+      winnerPubkey: winnerPubkey ?? undefined,
+      scoreHome,
+      scoreAway,
+      updatedAt: Date.now(),
+    });
+    // Await server update before refreshing so data isn't overwritten with stale state
+    try {
+      const res = await fetch('/api/challenges/control', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'finalize', challengeId, winnerPubkey, scoreHome, scoreAway }),
+      });
+      if (!res.ok) {
+        // If server rejects (e.g. already finalized), keep local cache as-is
+      }
+    } catch {
+      // Server unreachable, local cache already updated
+    }
+    await refreshChallenges();
+  }, [refreshChallenges]);
+
+  const setActiveChallengeById = useCallback(async (challengeId: string) => {
+    const cached = await cacheDb.challenges.get(challengeId);
+    if (cached) {
+      setActiveChallenge(cached);
+      return;
+    }
+    // Challenge not in cache yet, try fetching from server
+    try {
+      const res = await fetch(`/api/challenges/status?id=${encodeURIComponent(challengeId)}`);
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.ok && data.challenge) {
+        const ch = data.challenge as { id: string; ownerPubkey: string; rivalPubkey: string; mode: string; state: string; amountSats: number; expiresAt: string; createdAt: string; updatedAt: string };
+        const isOwner = ch.ownerPubkey === session.pubkey;
+        const rivalPubkey = isOwner ? ch.rivalPubkey : ch.ownerPubkey;
+        const newChallenge: CachedChallenge = {
+          id: ch.id,
+          accessToken: '',
+          ownerPubkey: session.pubkey,
+          sourceOwnerPubkey: ch.ownerPubkey,
+          direction: isOwner ? 'outgoing' : 'incoming',
+          mode: ch.mode as ChallengeMode,
+          state: ch.state as ChallengeState,
+          rivalPubkey,
+          rivalName: `Rival ${rivalPubkey.slice(0, 8)}`,
+          amountSats: ch.amountSats,
+          expirationAt: new Date(ch.expiresAt).getTime(),
+          createdAt: new Date(ch.createdAt).getTime(),
+          updatedAt: new Date(ch.updatedAt).getTime(),
+        };
+        await cacheDb.challenges.put(newChallenge);
+        setActiveChallenge(newChallenge);
+      }
+    } catch {
+      // ignore
+    }
+  }, [session.pubkey]);
+
+  const updateChallengeState = useCallback(async (challengeId: string, state: ChallengeState) => {
+    await cacheDb.challenges.update(challengeId, {
+      state,
+      updatedAt: Date.now(),
+    });
+    await refreshChallenges();
+  }, [refreshChallenges]);
+
   const clearActiveChallenge = useCallback(() => {
     setActiveChallenge(null);
   }, []);
@@ -794,13 +933,17 @@ export function ChallengeProvider({ children }: { children: ReactNode }) {
       rejectLinkedChallenge,
       acceptIncomingChallenge,
       enterAcceptedChallenge,
+      finalizeChallenge,
+      finalizeChallengeWithResult,
+      updateChallengeState,
+      setActiveChallengeById,
       clearActiveChallenge,
       challengeError,
       clearChallengeError,
       selectedFilter,
       setSelectedFilter,
     }),
-    [filteredChallenges, recentRivals, followingRivals, rivalMatches, rivalProfiles, linkedChallenge, activeChallenge, activeChallengeId, pendingIncomingCount, draft, setDraft, selectRival, createChallenge, refreshChallenges, loadLinkedChallenge, acceptLinkedChallenge, rejectLinkedChallenge, acceptIncomingChallenge, enterAcceptedChallenge, clearActiveChallenge, challengeError, clearChallengeError, selectedFilter]
+    [filteredChallenges, recentRivals, followingRivals, rivalMatches, rivalProfiles, linkedChallenge, activeChallenge, activeChallengeId, pendingIncomingCount, draft, setDraft, selectRival, createChallenge, refreshChallenges, loadLinkedChallenge, acceptLinkedChallenge, rejectLinkedChallenge, acceptIncomingChallenge, enterAcceptedChallenge, finalizeChallenge, finalizeChallengeWithResult, updateChallengeState, setActiveChallengeById, clearActiveChallenge, challengeError, clearChallengeError, selectedFilter]
   );
 
   return <ChallengeContext.Provider value={value}>{children}</ChallengeContext.Provider>;

@@ -15,7 +15,7 @@ import type { MatchState } from './game/physics';
 import { GameState, FIELD_WIDTH, FIELD_HEIGHT } from './game/types';
 import { NostrGatewayModal } from './nostr/NostrGatewayModal';
 import { useNostrSession } from './nostr/session-store';
-import { getNostrClient } from './nostr/client';
+import { getNostrClient, sendMatchNotification } from './nostr/client';
 import { GlobalSyncStatus } from './online/GlobalSyncStatus';
 import { useSyncStatus } from './online/sync-store';
 import { useMatchStore } from './match/store';
@@ -39,13 +39,20 @@ export default function App() {
   const lastHandledTerminationRef = useRef<string | null>(null);
   const { setSyncState } = useSyncStatus();
   const { session, refreshProfile } = useNostrSession();
-  const { activeChallenge, pendingIncomingCount, clearActiveChallenge } = useChallengeStore();
-  const { activeMatchId, activeMatchMeta, matchState, matchError, isCreatingMatch, isAnimatingShot, pendingShotAnimation, isSubmittingRematch, createMatch, submitShot, requestRematch, acceptRematch, clearMatch, finishShotAnimation } = useMatchStore();
+  const { activeChallenge, pendingIncomingCount, clearActiveChallenge, finalizeChallengeWithResult, setActiveChallengeById } = useChallengeStore();
+  const { activeMatchId, activeMatchMeta, matchState, matchError, isCreatingMatch, isAnimatingShot, pendingShotAnimation, isSubmittingRematch, rematchChallengeId, createMatch, submitShot, requestRematch, acceptRematch, clearMatch, finishShotAnimation, clearRematchChallengeId } = useMatchStore();
   const localTeam = activeChallenge?.direction === 'incoming' ? 'away' : activeChallenge?.direction === 'outgoing' ? 'home' : null;
   const localPubkey = session.profile?.pubkey || '';
 
   const terminateMatch = useCallback(async () => {
     if (!activeMatchId || !localPubkey) return;
+
+    const rivalPubkey = activeChallenge?.direction === 'outgoing'
+      ? activeChallenge.rivalPubkey
+      : activeChallenge?.direction === 'incoming'
+        ? activeChallenge.sourceOwnerPubkey || activeChallenge.ownerPubkey
+        : null;
+
     try {
       await fetch('/api/matches/control', {
         method: 'POST',
@@ -55,7 +62,12 @@ export default function App() {
     } catch {
       // ignore
     }
-    // Mark challenge as terminated in local cache
+
+    if (rivalPubkey) {
+      const senderName = session.profile?.name || 'Alguien';
+      void sendMatchNotification(rivalPubkey, 'terminate', activeMatchId, senderName);
+    }
+
     if (activeChallenge?.id) {
       try {
         await cacheDb.challenges.update(activeChallenge.id, {
@@ -69,7 +81,7 @@ export default function App() {
     clearMatch();
     clearActiveChallenge();
     setGameState(createInitialState());
-  }, [activeMatchId, localPubkey, activeChallenge, clearMatch, clearActiveChallenge]);
+  }, [activeMatchId, localPubkey, activeChallenge, clearMatch, clearActiveChallenge, session.profile?.name]);
 
   usePhaseOneBoot();
 
@@ -156,6 +168,44 @@ export default function App() {
 
     void terminateLocally();
   }, [activeMatchId, activeMatchMeta, activeChallenge, localPubkey, clearMatch, clearActiveChallenge]);
+
+  // Finalize challenge when match finishes with a winner
+  const lastFinalizedChallengeRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!activeMatchId || !activeMatchMeta || !activeChallenge?.id) return;
+    if (activeMatchMeta.status !== 'finished') return;
+    if (lastFinalizedChallengeRef.current === activeChallenge.id) return;
+
+    // Use matchState (from server) instead of gameState to avoid race condition
+    const serverScore = matchState?.score;
+    const serverWinner = matchState?.winner;
+    if (!serverScore || !serverWinner) return;
+
+    lastFinalizedChallengeRef.current = activeChallenge.id;
+
+    const winnerPubkey = serverWinner === 'home'
+      ? (activeChallenge.direction === 'outgoing' ? localPubkey : activeChallenge.rivalPubkey)
+      : serverWinner === 'away'
+        ? (activeChallenge.direction === 'outgoing' ? activeChallenge.rivalPubkey : localPubkey)
+        : null;
+
+    void finalizeChallengeWithResult(
+      activeChallenge.id,
+      winnerPubkey,
+      serverScore.home,
+      serverScore.away,
+    );
+  }, [activeMatchId, activeMatchMeta, activeChallenge, matchState, localPubkey, finalizeChallengeWithResult]);
+
+  // When rematch starts, load the new challenge
+  const lastRematchChallengeRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!rematchChallengeId) return;
+    if (lastRematchChallengeRef.current === rematchChallengeId) return;
+    lastRematchChallengeRef.current = rematchChallengeId;
+    void setActiveChallengeById(rematchChallengeId);
+    clearRematchChallengeId();
+  }, [rematchChallengeId, setActiveChallengeById, clearRematchChallengeId]);
 
   // Fetch rival Nostr profile for avatar when match starts
   const [rivalAvatarUrl, setRivalAvatarUrl] = useState<string | null>(null);

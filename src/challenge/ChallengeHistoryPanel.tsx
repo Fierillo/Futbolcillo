@@ -204,6 +204,26 @@ export function ChallengeHistoryPanel({ onAction }: Props) {
                     {challenge.state === 'in_match' && (
                       <span className="text-amber-400">En partida • Turno: {turnAlias || 'calculando...'}</span>
                     )}
+                    {challenge.state === 'finalized' && challenge.winnerPubkey && (
+                      <span className={challenge.winnerPubkey === session.pubkey ? 'text-emerald-400' : 'text-red-400'}>
+                        {challenge.winnerPubkey === session.pubkey ? 'Ganaste' : 'Perdiste'}
+                        {challenge.scoreHome != null && challenge.scoreAway != null && (
+                          <span className="ml-1.5 font-mono">{challenge.scoreHome} - {challenge.scoreAway}</span>
+                        )}
+                      </span>
+                    )}
+                    {challenge.state === 'finalized' && !challenge.winnerPubkey && (
+                      <span className="text-stone-400">Finalizado</span>
+                    )}
+                    {challenge.state === 'terminated' && (
+                      <span className="text-red-400">Terminado</span>
+                    )}
+                    {challenge.state === 'rejected' && (
+                      <span className="text-stone-400">Rechazado</span>
+                    )}
+                    {challenge.state === 'expired' && (
+                      <span className="text-stone-400">Expirado</span>
+                    )}
                     {challenge.mode === 'wager' && <span>{challenge.amountSats} sats</span>}
                   </div>
                   <div className="mt-2 flex items-center gap-2">

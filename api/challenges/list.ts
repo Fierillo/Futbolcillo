@@ -23,11 +23,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       mode: string;
       state: string;
       amount_sats: number;
+      winner_pubkey: string | null;
+      score_home: number | null;
+      score_away: number | null;
       expires_at: string;
       created_at: string;
       updated_at: string;
     }>`
-      select id, access_token, owner_pubkey, rival_pubkey, mode, state, amount_sats, expires_at::text, created_at::text, updated_at::text
+      select id, access_token, owner_pubkey, rival_pubkey, mode, state, amount_sats, winner_pubkey, score_home, score_away, expires_at::text, created_at::text, updated_at::text
       from challenges
       where owner_pubkey = ${pubkey}
       order by updated_at desc
@@ -42,11 +45,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       mode: string;
       state: string;
       amount_sats: number;
+      winner_pubkey: string | null;
+      score_home: number | null;
+      score_away: number | null;
       expires_at: string;
       created_at: string;
       updated_at: string;
     }>`
-      select id, access_token, owner_pubkey, rival_pubkey, mode, state, amount_sats, expires_at::text, created_at::text, updated_at::text
+      select id, access_token, owner_pubkey, rival_pubkey, mode, state, amount_sats, winner_pubkey, score_home, score_away, expires_at::text, created_at::text, updated_at::text
       from challenges
       where rival_pubkey = ${pubkey}
       order by updated_at desc
@@ -63,6 +69,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         mode: c.mode,
         state: c.state,
         amountSats: c.amount_sats,
+        winnerPubkey: c.winner_pubkey,
+        scoreHome: c.score_home,
+        scoreAway: c.score_away,
         expiresAt: c.expires_at,
         createdAt: c.created_at,
         updatedAt: c.updated_at,
@@ -75,6 +84,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         mode: c.mode,
         state: c.state,
         amountSats: c.amount_sats,
+        winnerPubkey: c.winner_pubkey,
+        scoreHome: c.score_home,
+        scoreAway: c.score_away,
         expiresAt: c.expires_at,
         createdAt: c.created_at,
         updatedAt: c.updated_at,

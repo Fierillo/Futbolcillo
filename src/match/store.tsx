@@ -1,9 +1,12 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import type { MatchState, ShotAnimation } from '../game/physics';
 import type { CachedChallenge } from '../challenge/types';
+import { sendMatchNotification } from '../nostr/client';
+import { useNostrSession } from '../nostr/session-store';
 
 type ActiveMatch = {
   id: string;
+  challengeId: string;
   status: string;
   homePubkey: string;
   awayPubkey: string;
@@ -23,6 +26,7 @@ interface MatchContextValue {
   isAnimatingShot: boolean;
   pendingShotAnimation: ShotAnimation | null;
   isSubmittingRematch: boolean;
+  rematchChallengeId: string | null;
   createMatch: (challenge: CachedChallenge) => Promise<void>;
   submitShot: (playerIndex: number, velX: number, velY: number) => Promise<void>;
   requestRematch: (requesterPubkey: string) => Promise<void>;
@@ -31,11 +35,13 @@ interface MatchContextValue {
   clearMatch: () => void;
   refreshMatchState: () => Promise<void>;
   finishShotAnimation: () => void;
+  clearRematchChallengeId: () => void;
 }
 
 const MatchContext = createContext<MatchContextValue | null>(null);
 
 export function MatchProvider({ children }: { children: ReactNode }) {
+  const { session } = useNostrSession();
   const [activeMatchId, setActiveMatchId] = useState<string | null>(null);
   const [activeMatchMeta, setActiveMatchMeta] = useState<ActiveMatch | null>(null);
   const [matchState, setMatchState] = useState<MatchState | null>(null);
@@ -44,6 +50,7 @@ export function MatchProvider({ children }: { children: ReactNode }) {
   const [isAnimatingShot, setIsAnimatingShot] = useState(false);
   const [pendingShotAnimation, setPendingShotAnimation] = useState<ShotAnimation | null>(null);
   const [isSubmittingRematch, setIsSubmittingRematch] = useState(false);
+  const [rematchChallengeId, setRematchChallengeId] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const creatingForChallengeRef = useRef<string | null>(null);
   const matchStateRef = useRef<MatchState | null>(null);
@@ -101,6 +108,10 @@ export function MatchProvider({ children }: { children: ReactNode }) {
     setIsAnimatingShot(false);
   }, []);
 
+  const clearRematchChallengeId = useCallback(() => {
+    setRematchChallengeId(null);
+  }, []);
+
   useEffect(() => {
     if (!activeMatchId) return;
 
@@ -138,6 +149,10 @@ export function MatchProvider({ children }: { children: ReactNode }) {
           setPendingShotAnimation(null);
           setIsSubmittingRematch(false);
           lastSeenShotIdRef.current = null;
+          // Notify about the new challenge so App.tsx can update activeChallenge
+          if (rematch.challengeId) {
+            setRematchChallengeId(rematch.challengeId);
+          }
         }
         return;
       }
@@ -284,12 +299,18 @@ export function MatchProvider({ children }: { children: ReactNode }) {
         return;
       }
       await refreshMatchState();
+
+      const opponentPubkey = requesterPubkey === activeMatchMeta.homePubkey
+        ? activeMatchMeta.awayPubkey
+        : activeMatchMeta.homePubkey;
+      const senderName = session.profile?.name || 'Alguien';
+      void sendMatchNotification(opponentPubkey, 'rematch-request', activeMatchId, senderName);
     } catch {
       setMatchError('No se pudo conectar con el servidor.');
     } finally {
       setIsSubmittingRematch(false);
     }
-  }, [activeMatchId, activeMatchMeta, refreshMatchState]);
+  }, [activeMatchId, activeMatchMeta, refreshMatchState, session.profile?.name]);
 
   const acceptRematch = useCallback(async (accepterPubkey: string) => {
     if (!activeMatchId || !activeMatchMeta || !matchStateRef.current || !accepterPubkey) return;
@@ -307,12 +328,18 @@ export function MatchProvider({ children }: { children: ReactNode }) {
         return;
       }
       await refreshMatchState();
+
+      const opponentPubkey = accepterPubkey === activeMatchMeta.homePubkey
+        ? activeMatchMeta.awayPubkey
+        : activeMatchMeta.homePubkey;
+      const senderName = session.profile?.name || 'Alguien';
+      void sendMatchNotification(opponentPubkey, 'rematch-accept', activeMatchId, senderName);
     } catch {
       setMatchError('No se pudo conectar con el servidor.');
     } finally {
       setIsSubmittingRematch(false);
     }
-  }, [activeMatchId, activeMatchMeta, refreshMatchState]);
+  }, [activeMatchId, activeMatchMeta, refreshMatchState, session.profile?.name]);
 
   const rejectRematch = useCallback(async (rejecterPubkey: string) => {
     if (!activeMatchId || !activeMatchMeta || !matchStateRef.current || !rejecterPubkey) return;
@@ -330,12 +357,18 @@ export function MatchProvider({ children }: { children: ReactNode }) {
         return;
       }
       await refreshMatchState();
+
+      const opponentPubkey = rejecterPubkey === activeMatchMeta.homePubkey
+        ? activeMatchMeta.awayPubkey
+        : activeMatchMeta.homePubkey;
+      const senderName = session.profile?.name || 'Alguien';
+      void sendMatchNotification(opponentPubkey, 'rematch-reject', activeMatchId, senderName);
     } catch {
       setMatchError('No se pudo conectar con el servidor.');
     } finally {
       setIsSubmittingRematch(false);
     }
-  }, [activeMatchId, activeMatchMeta, refreshMatchState]);
+  }, [activeMatchId, activeMatchMeta, refreshMatchState, session.profile?.name]);
 
   const value = {
     activeMatchId,
@@ -346,6 +379,7 @@ export function MatchProvider({ children }: { children: ReactNode }) {
     isAnimatingShot,
     pendingShotAnimation,
     isSubmittingRematch,
+    rematchChallengeId,
     createMatch,
     submitShot,
     requestRematch,
@@ -354,6 +388,7 @@ export function MatchProvider({ children }: { children: ReactNode }) {
     clearMatch,
     refreshMatchState,
     finishShotAnimation,
+    clearRematchChallengeId,
   };
 
   return <MatchContext.Provider value={value}>{children}</MatchContext.Provider>;
