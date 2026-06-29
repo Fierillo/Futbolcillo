@@ -1,10 +1,9 @@
-import { useEffect, useState } from 'react';
-import { ArrowLeft, CheckCircle2, ChevronDown, LoaderCircle, PlugZap, QrCode, RefreshCcw, Shield, Swords, Wallet, Wifi, X, Zap } from 'lucide-react';
+import { useCallback, useEffect, useState } from 'react';
+import { ArrowLeft, CheckCircle2, LoaderCircle, PlugZap, QrCode, RefreshCcw, Shield, Swords, X, Zap } from 'lucide-react';
 import { useChallengeStore } from '../challenge/store';
 import { ChallengeComposer } from '../challenge/ChallengeComposer';
 import { ChallengeHistoryPanel } from '../challenge/ChallengeHistoryPanel';
-import { getRelayList } from './client';
-import { useNostrSession } from './session-store';
+import { useNostrSession } from '../nostr/session-store';
 import type { NostrFeatureCard } from './types';
 
 interface Props {
@@ -37,13 +36,12 @@ export function NostrGatewayModal({ onClose, linkedChallengeId = '', linkedChall
   const hasLinkedChallenge = Boolean(linkedChallengeId && linkedChallengeToken);
   const [bunkerToken, setBunkerToken] = useState('');
   const [showQr, setShowQr] = useState(false);
-  const [showTechnicalNotes, setShowTechnicalNotes] = useState(false);
   const [qrUri, setQrUri] = useState('');
   const [qrLoading, setQrLoading] = useState(false);
+  const [qrExpired, setQrExpired] = useState(false);
   const [step, setStep] = useState<ModalStep>(hasLinkedChallenge ? 'connect' : 'intro');
-  const { session, connectNip07, connectBunker, startBunkerQr, finishBunkerQr, disconnect, refreshProfile } = useNostrSession();
+  const { session, connectNip07, connectBunker, startBunkerQr, cancelBunkerQr, disconnect, refreshProfile } = useNostrSession();
   const { linkedChallenge, loadLinkedChallenge, acceptLinkedChallenge, rejectLinkedChallenge } = useChallengeStore();
-  const relays = getRelayList();
   const isBusy = session.status === 'connecting';
   const bunkerQrUrl = qrUri
     ? `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(qrUri)}`
@@ -80,16 +78,41 @@ export function NostrGatewayModal({ onClose, linkedChallengeId = '', linkedChall
     void loadLinkedChallenge(linkedChallengeId, linkedChallengeToken, linkedChallengeOwner);
   }, [session.status, linkedChallengeId, linkedChallengeToken, linkedChallengeOwner, loadLinkedChallenge]);
 
-  const handleCreateQr = async () => {
+  const handleCreateQr = useCallback(async () => {
+    console.info('[nostr-bunker-qr-modal]', 'generate-clicked');
     setQrLoading(true);
+    setShowQr(true);
     try {
       const { uri } = await startBunkerQr();
+      console.info('[nostr-bunker-qr-modal]', 'qr-generated', { uri, uriLength: uri.length });
       setQrUri(uri);
-      setShowQr(true);
+      setQrExpired(false);
     } finally {
       setQrLoading(false);
     }
-  };
+  }, [startBunkerQr]);
+
+  // QR expiry timer — notifies after 60s
+  useEffect(() => {
+    if (!showQr) return;
+    const timer = setTimeout(() => {
+      console.warn('[nostr-bunker-qr-modal]', 'qr-expired');
+      cancelBunkerQr();
+      setQrExpired(true);
+      setQrUri('');
+    }, 60_000);
+    return () => clearTimeout(timer);
+  }, [cancelBunkerQr, showQr]);
+
+  // Reset QR when session errors
+  useEffect(() => {
+    if (session.status !== 'error' || session.method !== 'bunker') return;
+    console.error('[nostr-bunker-qr-modal]', 'session-error', { error: session.error });
+    cancelBunkerQr();
+    setShowQr(false);
+    setQrUri('');
+    setQrExpired(false);
+  }, [cancelBunkerQr, session.error, session.method, session.status]);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 px-2 sm:px-4">
@@ -203,7 +226,7 @@ export function NostrGatewayModal({ onClose, linkedChallengeId = '', linkedChall
                   <div className="mb-3 flex h-8 w-8 items-center justify-center rounded-full bg-stone-700 text-stone-100">
                     {index === 0 && <Swords size={16} />}
                     {index === 1 && <Zap size={16} />}
-                    {index === 2 && <Wifi size={16} />}
+                    {index === 2 && <RefreshCcw size={16} />}
                   </div>
                   <h3 className="mb-1 text-base font-bold text-stone-100">{feature.title}</h3>
                   <p className="text-xs text-stone-400">{feature.description}</p>
@@ -233,7 +256,7 @@ export function NostrGatewayModal({ onClose, linkedChallengeId = '', linkedChall
         )}
 
         {activeStep === 'connect' && (
-          <div className="mt-4 grid gap-3 lg:grid-cols-[1.15fr,0.85fr]">
+          <div className="mt-4">
             <div className="rounded-2xl border border-stone-700 bg-stone-800/70 p-3">
               <div className="mb-2 flex items-center gap-2 text-stone-200">
                 <Shield size={18} className="text-sky-400" />
@@ -279,13 +302,22 @@ export function NostrGatewayModal({ onClose, linkedChallengeId = '', linkedChall
                       className="flex items-center gap-2 rounded-lg bg-stone-700 px-3 py-2 text-sm font-semibold text-white transition-colors hover:bg-stone-600 disabled:cursor-not-allowed disabled:opacity-60"
                     >
                       <QrCode size={15} />
-                      {qrLoading ? 'Preparando QR...' : 'Generar QR'}
+                      {qrLoading ? 'Preparando...' : qrExpired ? 'Regenerar QR' : 'Generar QR'}
                     </button>
                   </div>
-                  {showQr && bunkerQrUrl && (
+                  {showQr && (
                     <div className="mt-3 flex flex-col items-center rounded-2xl border border-stone-700 bg-stone-950/70 p-3">
-                      <img src={bunkerQrUrl} alt="QR para bunker" className="h-44 w-44 rounded-xl bg-white p-2" />
-                      <p className="mt-2 text-center text-xs text-stone-500">Escaneá desde tu signer remoto. La conexión se completará automáticamente.</p>
+                      {bunkerQrUrl && (
+                        <img src={bunkerQrUrl} alt="QR para bunker" className="h-44 w-44 rounded-xl bg-white p-2" />
+                      )}
+                      <p className="mt-2 text-center text-xs text-stone-500">
+                        Escaneá desde tu signer remoto. La conexión se completará automáticamente.
+                      </p>
+                      {qrExpired && (
+                        <p className="mt-2 text-center text-xs text-amber-400">
+                          QR expirado. Regenerá uno nuevo para reintentar.
+                        </p>
+                      )}
                     </div>
                   )}
                 </div>
@@ -295,49 +327,6 @@ export function NostrGatewayModal({ onClose, linkedChallengeId = '', linkedChall
                   {session.error}
                 </div>
               )}
-            </div>
-
-            <div className="rounded-2xl border border-stone-700 bg-stone-800/70 p-3">
-              <div className="mb-2 flex items-center gap-2 text-stone-200">
-                <Wifi size={18} className="text-emerald-400" />
-                <h3 className="font-bold">Qué desbloquea</h3>
-              </div>
-              <ul className="space-y-2 text-sm text-stone-400">
-                <li>Perfil real dentro del juego.</li>
-                <li>Invitar rivales y seguir desafíos.</li>
-                <li>Preparar amistosos y apuestas en sats.</li>
-                <li className="flex items-center gap-2"><Wallet size={14} className="text-amber-300" /> Más adelante: premio al ganador.</li>
-              </ul>
-
-              <div className="mt-3 rounded-2xl border border-stone-700 bg-stone-900/60">
-                <button
-                  type="button"
-                  onClick={() => setShowTechnicalNotes((value) => !value)}
-                  className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-stone-300 transition-colors hover:bg-stone-800/70"
-                >
-                  <span>Notas técnicas</span>
-                  <ChevronDown size={15} className={`transition-transform ${showTechnicalNotes ? 'rotate-180' : ''}`} />
-                </button>
-
-                {showTechnicalNotes && (
-                  <div className="border-t border-stone-700 px-3 py-3 text-xs text-stone-400">
-                    <ul className="space-y-2">
-                      <li>Caché local separada por pubkey.</li>
-                      <li>Relays mixtos con refresh en segundo plano.</li>
-                      <li>Preparado para partidas online y escrow.</li>
-                      <li>NWC del juego pensado para recibir y pagar sats.</li>
-                    </ul>
-                    <div className="mt-3 rounded-xl border border-stone-700 bg-stone-950/60 p-3">
-                      <p className="mb-2 font-semibold uppercase tracking-wider text-stone-300">Relays iniciales</p>
-                      <div className="space-y-1">
-                        {relays.map((relay) => (
-                          <p key={relay} className="truncate">{relay}</p>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </div>
             </div>
           </div>
         )}
