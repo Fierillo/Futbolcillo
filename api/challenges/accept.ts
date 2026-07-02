@@ -42,15 +42,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     if (!challenge && body.ownerPubkey) {
       const expiresAt = body.expiresAt || new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
-
-      await query`
-        insert into users (pubkey) values (${body.ownerPubkey})
-        on conflict (pubkey) do nothing
-      `;
-      await query`
-        insert into users (pubkey) values (${body.rivalPubkey})
-        on conflict (pubkey) do nothing
-      `;
       await query`
         insert into challenges (id, access_token, owner_pubkey, rival_pubkey, mode, state, amount_sats, expires_at)
         values (${body.challengeId}, ${body.accessToken}, ${body.ownerPubkey}, ${body.rivalPubkey}, ${body.mode || 'friendly'}, 'accepted', ${body.amountSats || 0}, ${expiresAt}::timestamptz)

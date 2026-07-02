@@ -26,16 +26,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     await query`
-      insert into users (pubkey) values (${body.ownerPubkey})
-      on conflict (pubkey) do nothing
-    `;
-
-    await query`
-      insert into users (pubkey) values (${body.rivalPubkey})
-      on conflict (pubkey) do nothing
-    `;
-
-    await query`
       insert into challenges (id, access_token, owner_pubkey, rival_pubkey, mode, state, amount_sats, expires_at)
       values (${body.id}, ${body.accessToken}, ${body.ownerPubkey}, ${body.rivalPubkey}, ${body.mode}, 'sent', ${body.amountSats}, ${body.expiresAt}::timestamptz)
     `;
