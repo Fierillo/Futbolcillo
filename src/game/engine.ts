@@ -509,12 +509,20 @@ export function handleMouseUp(state: GameState): GameState {
 
   if (clampedPower > 1) {
     const dir = normalize(vec2(dx, dy));
-    player.vel.x = dir.x * clampedPower;
-    player.vel.y = dir.y * clampedPower;
+    const velocityX = dir.x * clampedPower;
+    const velocityY = dir.y * clampedPower;
+    player.vel.x = velocityX;
+    player.vel.y = velocityY;
     state.phase = 'shooting';
     state.activeShotPlayer = state.players.indexOf(player);
     state.activeShotTouchedBall = false;
     state.activeShotCommittedFoul = false;
+    state.lastShot = {
+      id: `local-shot-${Date.now()}`,
+      playerIndex: state.players.indexOf(player),
+      velX: velocityX,
+      velY: velocityY,
+    };
     logFoulDebug('shot started', {
       shooter: player.number,
       team: player.team,

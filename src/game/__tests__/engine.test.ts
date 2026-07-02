@@ -178,7 +178,7 @@ describe('updateGame - fouls', () => {
         foulDetected = true;
         break;
       }
-      if (state.phase === 'aiming') break;
+      if ((state.phase as 'aiming' | 'shooting' | 'resetting') === 'aiming') break;
     }
 
     expect(foulDetected).toBe(true);

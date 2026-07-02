@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createInitialMatchState, simulateShot, type MatchState } from '../physics';
+import { createInitialMatchState, simulateShot } from '../physics';
 
 describe('createInitialMatchState', () => {
   it('creates state with correct teams and initial positions', () => {

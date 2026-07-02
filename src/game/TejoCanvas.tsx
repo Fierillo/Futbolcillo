@@ -8,9 +8,10 @@ interface Props {
   onMouseUp: () => void;
   scale: number;
   isRotated?: boolean;
+  isInteractionBlocked?: boolean;
 }
 
-export default function TejoCanvas({ gameState, onMouseDown, onMouseMove, onMouseUp, scale, isRotated = false }: Props) {
+export default function TejoCanvas({ gameState, onMouseDown, onMouseMove, onMouseUp, scale, isRotated = false, isInteractionBlocked = false }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   const drawUprightText = useCallback((ctx: CanvasRenderingContext2D, text: string, x: number, y: number) => {
@@ -363,7 +364,7 @@ export default function TejoCanvas({ gameState, onMouseDown, onMouseMove, onMous
         height: FIELD_HEIGHT * scale,
         transform: isRotated ? 'rotate(90deg)' : 'none',
         touchAction: 'none',
-        cursor: gameState.phase === 'aiming' ? 'crosshair' : 'default',
+        cursor: isInteractionBlocked ? 'not-allowed' : gameState.phase === 'aiming' ? 'crosshair' : 'default',
       }}
       className="rounded-lg shadow-2xl border-4 border-green-950"
     />

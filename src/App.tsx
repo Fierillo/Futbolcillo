@@ -10,12 +10,11 @@ import {
   handleMouseMove,
   handleMouseUp,
 } from './game/engine';
-import { simulateStep } from './game/physics';
-import type { MatchState } from './game/physics';
+import type { PhysicsBall, PhysicsPlayer } from './game/physics';
 import { GameState, FIELD_WIDTH, FIELD_HEIGHT } from './game/types';
 import { NostrGatewayModal } from './nostr/NostrGatewayModal';
 import { useNostrSession } from './nostr/session-store';
-import { getNostrClient, sendMatchNotification } from './nostr/client';
+import { getNostrClient } from './nostr/client';
 import { GlobalSyncStatus } from './online/GlobalSyncStatus';
 import { useSyncStatus } from './online/sync-store';
 import { useMatchStore } from './match/store';
@@ -33,55 +32,42 @@ export default function App() {
   const [isMobilePortrait, setIsMobilePortrait] = useState(false);
   const [terminationNotice, setTerminationNotice] = useState('');
   const gameStateRef = useRef<GameState>(gameState);
-  const previousPhaseRef = useRef<GameState['phase']>(gameState.phase);
   const animFrameRef = useRef<number>(0);
   const containerRef = useRef<HTMLDivElement>(null);
   const lastHandledTerminationRef = useRef<string | null>(null);
   const { setSyncState } = useSyncStatus();
   const { session, refreshProfile } = useNostrSession();
-  const { activeChallenge, pendingIncomingCount, clearActiveChallenge, finalizeChallengeWithResult, setActiveChallengeById } = useChallengeStore();
-  const { activeMatchId, activeMatchMeta, matchState, matchError, isCreatingMatch, isAnimatingShot, pendingShotAnimation, isSubmittingRematch, rematchChallengeId, createMatch, submitShot, requestRematch, acceptRematch, clearMatch, finishShotAnimation, clearRematchChallengeId } = useMatchStore();
+  const { activeChallenge, pendingIncomingCount, clearActiveChallenge, finalizeChallengeWithResult, syncChallengeProgress, setActiveChallengeById } = useChallengeStore();
+  const { activeMatchId, activeMatchMeta, matchState, matchError, isCreatingMatch, isSubmittingShot, isAnimatingShot, pendingShotAnimation, isSubmittingRematch, rematchChallengeId, interactionResetNonce, createMatch, submitShot, requestRematch, acceptRematch, terminateMatch: terminateRealtimeMatch, clearMatch, finishShotAnimation, clearRematchChallengeId } = useMatchStore();
   const localTeam = activeChallenge?.direction === 'incoming' ? 'away' : activeChallenge?.direction === 'outgoing' ? 'home' : null;
   const localPubkey = session.profile?.pubkey || '';
+  const isResumingMatch = activeChallenge?.state === 'in_match';
+
+  const isOnlineInteractionBlocked = Boolean(
+    isSubmittingShot
+    || isAnimatingShot
+    || (activeMatchId && matchState && (matchState.turn !== localTeam || matchState.phase !== 'aiming'))
+  );
+
+  const cloneMatchPlayers = (players: PhysicsPlayer[]) => players.map((p) => ({
+    ...p,
+    isSelected: false,
+    cooldown: 0,
+    color: p.team === 'away' ? '#b91c1c' : '#1e40af',
+    strokeColor: p.team === 'away' ? '#f87171' : '#60a5fa',
+  }));
+
+  const cloneMatchBall = (ball: PhysicsBall) => ({
+    ...ball,
+    color: '#fbbf24',
+    strokeColor: '#f59e0b',
+  });
 
   const terminateMatch = useCallback(async () => {
     if (!activeMatchId || !localPubkey) return;
 
-    const rivalPubkey = activeChallenge?.direction === 'outgoing'
-      ? activeChallenge.rivalPubkey
-      : activeChallenge?.direction === 'incoming'
-        ? activeChallenge.sourceOwnerPubkey || activeChallenge.ownerPubkey
-        : null;
-
-    try {
-      await fetch('/api/matches/control', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'terminate', matchId: activeMatchId, terminatedBy: localPubkey }),
-      });
-    } catch {
-      // ignore
-    }
-
-    if (rivalPubkey) {
-      const senderName = session.profile?.name || 'Alguien';
-      void sendMatchNotification(rivalPubkey, 'terminate', activeMatchId, senderName);
-    }
-
-    if (activeChallenge?.id) {
-      try {
-        await cacheDb.challenges.update(activeChallenge.id, {
-          state: 'terminated',
-          updatedAt: Date.now(),
-        });
-      } catch {
-        // ignore
-      }
-    }
-    clearMatch();
-    clearActiveChallenge();
-    setGameState(createInitialState());
-  }, [activeMatchId, localPubkey, activeChallenge, clearMatch, clearActiveChallenge, session.profile?.name]);
+    await terminateRealtimeMatch(localPubkey);
+  }, [activeMatchId, localPubkey, terminateRealtimeMatch]);
 
   usePhaseOneBoot();
 
@@ -107,6 +93,22 @@ export default function App() {
     setLinkedChallengeOwner(challengeOwner);
     setShowNostrGateway(true);
   }, []);
+
+  useEffect(() => {
+    const url = new URL(window.location.href);
+
+    if (activeChallenge?.id && activeChallenge.accessToken) {
+      url.searchParams.set('challenge', activeChallenge.id);
+      url.searchParams.set('token', activeChallenge.accessToken);
+      url.searchParams.set('owner', activeChallenge.sourceOwnerPubkey || activeChallenge.ownerPubkey);
+    } else {
+      url.searchParams.delete('challenge');
+      url.searchParams.delete('token');
+      url.searchParams.delete('owner');
+    }
+
+    window.history.replaceState({}, '', url);
+  }, [activeChallenge]);
 
   useEffect(() => {
     gameStateRef.current = gameState;
@@ -171,6 +173,7 @@ export default function App() {
 
   // Finalize challenge when match finishes with a winner
   const lastFinalizedChallengeRef = useRef<string | null>(null);
+  const lastSyncedChallengeScoreRef = useRef<string>('');
   useEffect(() => {
     if (!activeMatchId || !activeMatchMeta || !activeChallenge?.id) return;
     if (activeMatchMeta.status !== 'finished') return;
@@ -197,6 +200,22 @@ export default function App() {
     );
   }, [activeMatchId, activeMatchMeta, activeChallenge, matchState, localPubkey, finalizeChallengeWithResult]);
 
+  useEffect(() => {
+    if (!activeMatchId || !activeMatchMeta || !activeChallenge?.id || !matchState?.score) return;
+    if (activeMatchMeta.status !== 'active') return;
+
+    const scoreKey = `${activeChallenge.id}:${matchState.score.home}:${matchState.score.away}`;
+    if (lastSyncedChallengeScoreRef.current === scoreKey) return;
+    lastSyncedChallengeScoreRef.current = scoreKey;
+
+    void syncChallengeProgress(
+      activeChallenge.id,
+      'in_match',
+      matchState.score.home,
+      matchState.score.away,
+    );
+  }, [activeMatchId, activeMatchMeta, activeChallenge, matchState, syncChallengeProgress]);
+
   // When rematch starts, load the new challenge
   const lastRematchChallengeRef = useRef<string | null>(null);
   useEffect(() => {
@@ -210,12 +229,16 @@ export default function App() {
   // Fetch rival Nostr profile for avatar when match starts
   const [rivalAvatarUrl, setRivalAvatarUrl] = useState<string | null>(null);
   useEffect(() => {
-    if (!activeChallenge || !activeMatchId) {
+    if (!activeMatchId) {
       setRivalAvatarUrl(null);
       return;
     }
 
-    const rivalPubkey = activeChallenge.rivalPubkey;
+    const rivalPubkey = activeChallenge?.rivalPubkey
+      || (activeMatchMeta
+        ? (activeMatchMeta.homePubkey === session.profile?.pubkey ? activeMatchMeta.awayPubkey : activeMatchMeta.homePubkey)
+        : '')
+      || '';
     if (!rivalPubkey) return;
 
     let cancelled = false;
@@ -255,7 +278,7 @@ export default function App() {
 
     void fetchRivalProfile();
     return () => { cancelled = true; };
-  }, [activeChallenge, activeMatchId]);
+  }, [activeChallenge, activeMatchId, activeMatchMeta, session.profile?.pubkey]);
 
   // Responsive scaling
   useEffect(() => {
@@ -280,7 +303,7 @@ export default function App() {
 
   // Sync server state to local game state when in online mode
   useEffect(() => {
-    if (!matchState || !activeMatchId || isAnimatingShot) return;
+    if (!matchState || !activeMatchId || isAnimatingShot || isSubmittingShot) return;
 
     setGameState((prev) => {
       const next = { ...prev };
@@ -307,32 +330,30 @@ export default function App() {
       next.bonusTurnTeam = matchState.bonusTurnTeam;
       next.pendingBonusTurns = matchState.pendingBonusTurns;
       next.lastShot = matchState.lastShot;
-      next.lastShotAnimation = matchState.lastShotAnimation;
+      next.lastShotAnimation = null;
+      next.selectedPlayer = null;
+      next.dragStart = null;
+      next.dragCurrent = null;
       return next;
     });
-  }, [matchState, activeMatchId, isAnimatingShot]);
+  }, [matchState, activeMatchId, isAnimatingShot, isSubmittingShot]);
 
-  // Detect when shot animation finishes only on a real transition shooting -> aiming.
   useEffect(() => {
-    const previousPhase = previousPhaseRef.current;
-    if (
-      isAnimatingShot &&
-      shotInitializedRef.current &&
-      previousPhase === 'shooting' &&
-      gameState.phase === 'aiming'
-    ) {
-      shotInitializedRef.current = false;
-      finishShotAnimation();
-    }
-    previousPhaseRef.current = gameState.phase;
-  }, [gameState.phase, isAnimatingShot, finishShotAnimation]);
+    if (!interactionResetNonce) return;
+    setGameState((prev) => ({
+      ...prev,
+      selectedPlayer: null,
+      dragStart: null,
+      dragCurrent: null,
+    }));
+  }, [interactionResetNonce]);
 
-  // Game loop (runs in training mode, during online shot animations, and while visual effects are active)
-  const shotInitializedRef = useRef(false);
+  // Game loop helpers
+  const shotAnimationStartRef = useRef(0);
+  const SHOT_ANIMATION_MS = 2520;
 
   useEffect(() => {
     if (activeMatchId && !isAnimatingShot && gameState.messageTimer <= 0 && gameState.cameraShake <= 0 && !gameState.winner) {
-      shotInitializedRef.current = false;
       return;
     }
 
@@ -352,80 +373,11 @@ export default function App() {
         next.dragStart = prev.dragStart ? { ...prev.dragStart } : null;
         next.dragCurrent = prev.dragCurrent ? { ...prev.dragCurrent } : null;
 
-        if (isAnimatingShot) {
-          if (!shotInitializedRef.current && pendingShotAnimation) {
-            shotInitializedRef.current = true;
-            const anim = pendingShotAnimation;
-            const init = anim.initialState;
-
-            next.players = init.players.map((p) => ({
-              ...p,
-              isSelected: false,
-              cooldown: 0,
-              color: p.team === 'away' ? '#b91c1c' : '#1e40af',
-              strokeColor: p.team === 'away' ? '#f87171' : '#60a5fa',
-            }));
-            next.ball = { ...init.ball, color: '#fbbf24', strokeColor: '#f59e0b' };
-            next.goals = [...init.goals];
-            next.score = { ...init.score };
-            next.turn = init.turn;
-            next.phase = 'shooting';
-            next.winner = init.winner;
-            next.activeShotPlayer = anim.playerIndex;
-            next.activeShotTouchedBall = false;
-            next.activeShotCommittedFoul = false;
-            next.bonusTurnTeam = init.bonusTurnTeam;
-            next.pendingBonusTurns = init.pendingBonusTurns;
-            next.lastShot = init.lastShot;
-            next.lastShotAnimation = init.lastShotAnimation;
-            next.dragStart = null;
-            next.dragCurrent = null;
-            next.selectedPlayer = null;
-
-            const player = next.players[anim.playerIndex];
-            if (player) {
-              next.players[anim.playerIndex] = {
-                ...player,
-                vel: { x: anim.velX, y: anim.velY },
-              };
-            }
-          }
-
-          // Run one physics step (same code as server)
-          const scoreBefore = { ...next.score };
-          const winnerBefore = next.winner;
-          const foulBefore = next.activeShotCommittedFoul;
-          simulateStep(next as unknown as MatchState);
-
-          if (!foulBefore && next.activeShotCommittedFoul) {
-            const foulTeam = next.activeShotPlayer !== null ? next.players[next.activeShotPlayer]?.team : null;
-            const foulVictim = foulTeam === 'home' ? awayAlias : homeAlias;
-            next.message = `¡Falta! ${foulVictim.toUpperCase()} gana dos jugadas.`;
-            next.messageTimer = 120;
-            next.cameraShake = 6;
-          }
-
-          if (next.score.home !== scoreBefore.home || next.score.away !== scoreBefore.away) {
-            const goalScorer = next.score.home !== scoreBefore.home ? 'home' : 'away';
-            const scorerName = goalScorer === 'home' ? homeAlias : awayAlias;
-            next.message = `¡GOL DE ${scorerName.toUpperCase()}!`;
-            next.messageTimer = 120;
-            next.cameraShake = 12;
-          }
-
-          if (!winnerBefore && next.winner) {
-            const winnerName = next.winner === 'home' ? homeAlias : awayAlias;
-            next.message = `¡${winnerName.toUpperCase()} CAMPEÓN!`;
-            next.messageTimer = 120;
-            next.cameraShake = 12;
-          }
-        } else {
-          updateGame(next, dt);
-        }
+        updateGame(next, dt);
         return next;
       });
 
-      const shouldContinue = !activeMatchId || isAnimatingShot || gameStateRef.current.messageTimer > 0 || gameStateRef.current.cameraShake > 0;
+      const shouldContinue = !activeMatchId || gameStateRef.current.messageTimer > 0 || gameStateRef.current.cameraShake > 0;
       if (shouldContinue) {
         animFrameRef.current = requestAnimationFrame(loop);
       }
@@ -433,10 +385,129 @@ export default function App() {
 
     animFrameRef.current = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(animFrameRef.current);
-  }, [activeMatchId, isAnimatingShot]);
+  }, [activeChallenge, activeMatchId, activeMatchMeta, gameState.cameraShake, gameState.messageTimer, gameState.winner, session.profile?.name]);
+
+  useEffect(() => {
+    if (!isAnimatingShot || !pendingShotAnimation) return;
+
+    const anim = pendingShotAnimation;
+    const onlineHomeAlias = activeMatchMeta?.homeName
+      || (activeChallenge?.direction === 'outgoing'
+        ? session.profile?.name || 'Local'
+        : activeChallenge?.direction === 'incoming'
+          ? activeChallenge.rivalName || 'Rival'
+          : 'Local');
+    const onlineAwayAlias = activeMatchMeta?.awayName
+      || (activeChallenge?.direction === 'outgoing'
+        ? activeChallenge.rivalName || 'Rival'
+        : activeChallenge?.direction === 'incoming'
+          ? session.profile?.name || 'Local'
+          : 'Máquina');
+
+    if (!anim.initialState || !anim.finalState || !Array.isArray(anim.frames) || anim.frames.length === 0) {
+      console.error('[online-shot][app] invalid-animation-payload', anim);
+      finishShotAnimation();
+      return;
+    }
+
+    console.info('[online-shot][app] animation-start', {
+      id: anim.id,
+      frames: anim.frames?.length || 0,
+    });
+
+    shotAnimationStartRef.current = performance.now();
+
+    const renderFrame = (time: number) => {
+      const progress = Math.min(1, (time - shotAnimationStartRef.current) / SHOT_ANIMATION_MS);
+      const frameIndex = Math.min(anim.frames.length - 1, Math.floor(progress * (anim.frames.length - 1)));
+      const frame = anim.frames[frameIndex];
+      const finalState = anim.finalState;
+      const framePlayers = Array.isArray(frame?.players) ? frame.players : [];
+      const frameBall = frame?.ball ?? anim.initialState.ball.pos;
+
+      setGameState((prev) => {
+        const next = { ...prev };
+        next.players = cloneMatchPlayers(anim.initialState.players).map((player, index) => ({
+          ...player,
+          pos: {
+            x: framePlayers[index]?.x ?? player.pos.x,
+            y: framePlayers[index]?.y ?? player.pos.y,
+          },
+        }));
+        next.ball = {
+          ...cloneMatchBall(anim.initialState.ball),
+          pos: {
+            x: frameBall.x,
+            y: frameBall.y,
+          },
+          trail: progress < 1 ? [] : [...finalState.ball.trail],
+        };
+        next.goals = [...anim.initialState.goals];
+        next.score = progress < 1 ? { ...anim.initialState.score } : { ...finalState.score };
+        next.turn = progress < 1 ? anim.initialState.turn : finalState.turn;
+        next.phase = progress < 1 ? 'shooting' : finalState.phase;
+        next.winner = progress < 1 ? anim.initialState.winner : finalState.winner;
+        next.activeShotPlayer = progress < 1 ? anim.playerIndex : finalState.activeShotPlayer;
+        next.activeShotTouchedBall = progress < 1 ? false : finalState.activeShotTouchedBall;
+        next.activeShotCommittedFoul = progress < 1 ? false : finalState.activeShotCommittedFoul;
+        next.bonusTurnTeam = progress < 1 ? anim.initialState.bonusTurnTeam : finalState.bonusTurnTeam;
+        next.pendingBonusTurns = progress < 1 ? anim.initialState.pendingBonusTurns : finalState.pendingBonusTurns;
+        next.lastShot = progress < 1 ? anim.initialState.lastShot : finalState.lastShot;
+        next.lastShotAnimation = null;
+        next.dragStart = null;
+        next.dragCurrent = null;
+        next.selectedPlayer = null;
+
+        if (progress >= 1) {
+          const goalScored = finalState.score.home !== anim.initialState.score.home || finalState.score.away !== anim.initialState.score.away;
+          if (goalScored) {
+            const goalScorer = finalState.score.home !== anim.initialState.score.home ? 'home' : 'away';
+            const scorerName = goalScorer === 'home' ? onlineHomeAlias : onlineAwayAlias;
+            next.message = `¡GOL DE ${scorerName.toUpperCase()}!`;
+            next.messageTimer = 120;
+            next.cameraShake = 12;
+          } else if (!anim.initialState.activeShotCommittedFoul && finalState.activeShotCommittedFoul) {
+            const foulTeam = finalState.activeShotPlayer !== null ? finalState.players[finalState.activeShotPlayer]?.team : null;
+            const foulVictim = foulTeam === 'home' ? onlineAwayAlias : onlineHomeAlias;
+            next.message = `¡Falta! ${foulVictim.toUpperCase()} gana dos jugadas.`;
+            next.messageTimer = 120;
+            next.cameraShake = 6;
+          } else if (!anim.initialState.winner && finalState.winner) {
+            const winnerName = finalState.winner === 'home' ? onlineHomeAlias : onlineAwayAlias;
+            next.message = `¡${winnerName.toUpperCase()} CAMPEÓN!`;
+            next.messageTimer = 120;
+            next.cameraShake = 12;
+          }
+        }
+
+        return next;
+      });
+
+      if (progress >= 1) {
+        console.info('[online-shot][app] animation-finished', {
+          id: anim.id,
+          finalTurn: finalState.turn,
+          finalPhase: finalState.phase,
+          score: finalState.score,
+        });
+        finishShotAnimation();
+        return;
+      }
+
+      animFrameRef.current = requestAnimationFrame(renderFrame);
+    };
+
+    animFrameRef.current = requestAnimationFrame(renderFrame);
+    return () => cancelAnimationFrame(animFrameRef.current);
+  }, [activeChallenge, activeMatchMeta, finishShotAnimation, isAnimatingShot, pendingShotAnimation, session.profile?.name]);
 
   const onMouseDown = useCallback((x: number, y: number) => {
-    if (activeChallenge && gameStateRef.current.turn !== localTeam) return;
+    if (isSubmittingShot || isAnimatingShot) return;
+    if (activeMatchId && matchState) {
+      if (matchState.turn !== localTeam || matchState.phase !== 'aiming') return;
+    } else if (activeChallenge && gameStateRef.current.turn !== localTeam) {
+      return;
+    }
 
     setGameState((prev) => {
       const next = { ...prev };
@@ -450,10 +521,15 @@ export default function App() {
       handleMouseDown(next, x, y);
       return next;
     });
-  }, [activeChallenge, localTeam]);
+  }, [activeChallenge, activeMatchId, isAnimatingShot, isSubmittingShot, localTeam, matchState]);
 
   const onMouseMove = useCallback((x: number, y: number) => {
-    if (activeChallenge && gameStateRef.current.turn !== localTeam) return;
+    if (isSubmittingShot || isAnimatingShot) return;
+    if (activeMatchId && matchState) {
+      if (matchState.turn !== localTeam || matchState.phase !== 'aiming') return;
+    } else if (activeChallenge && gameStateRef.current.turn !== localTeam) {
+      return;
+    }
 
     setGameState((prev) => {
       const next = { ...prev };
@@ -467,15 +543,60 @@ export default function App() {
       handleMouseMove(next, x, y);
       return next;
     });
-  }, [activeChallenge, localTeam]);
+  }, [activeChallenge, activeMatchId, isAnimatingShot, isSubmittingShot, localTeam, matchState]);
 
   const onMouseUp = useCallback(() => {
-    if (activeChallenge && gameStateRef.current.turn !== localTeam) return;
+    console.info('[online-shot][app] mouse-up', {
+      activeMatchId,
+      isSubmittingShot,
+      isAnimatingShot,
+      localTeam,
+      matchTurn: matchState?.turn,
+      matchPhase: matchState?.phase,
+      selectedPlayer: gameStateRef.current.selectedPlayer,
+      dragStart: gameStateRef.current.dragStart,
+      dragCurrent: gameStateRef.current.dragCurrent,
+    });
+    if (isSubmittingShot || isAnimatingShot) return;
+    if (activeMatchId && matchState) {
+      if (matchState.turn !== localTeam || matchState.phase !== 'aiming') return;
+    } else if (activeChallenge && gameStateRef.current.turn !== localTeam) {
+      return;
+    }
+
+    let shotCandidate: { playerTeam: 'home' | 'away'; playerNumber: number; velX: number; velY: number } | null = null;
+
+    if (activeMatchId) {
+      const current = gameStateRef.current;
+      const probe = {
+        ...current,
+        players: current.players.map((p) => ({ ...p })),
+        particles: current.particles.map((p) => ({ ...p })),
+        ball: { ...current.ball, trail: [...current.ball.trail] },
+        goals: [...current.goals],
+        score: { ...current.score },
+        dragStart: current.dragStart ? { ...current.dragStart } : null,
+        dragCurrent: current.dragCurrent ? { ...current.dragCurrent } : null,
+      };
+
+      handleMouseUp(probe);
+      if (probe.phase === 'shooting' && probe.lastShot) {
+        const localPlayer = current.players[probe.lastShot.playerIndex];
+        if (!localPlayer) {
+          console.warn('[online-shot][app] missing-local-player-for-shot', probe.lastShot);
+        } else {
+        shotCandidate = {
+          playerTeam: localPlayer.team,
+          playerNumber: localPlayer.number,
+          velX: probe.lastShot.velX,
+          velY: probe.lastShot.velY,
+        };
+        console.info('[online-shot][app] shot-candidate', shotCandidate);
+        }
+      }
+    }
 
     setGameState((prev) => {
-      const selectedPlayer = prev.selectedPlayer !== null ? prev.players[prev.selectedPlayer] : null;
-      const dragStart = prev.dragStart;
-      const dragCurrent = prev.dragCurrent;
       const next = { ...prev };
       next.players = prev.players.map((p) => ({ ...p }));
       next.particles = prev.particles.map((p) => ({ ...p }));
@@ -485,43 +606,24 @@ export default function App() {
       next.dragStart = prev.dragStart ? { ...prev.dragStart } : null;
       next.dragCurrent = prev.dragCurrent ? { ...prev.dragCurrent } : null;
 
-      if (activeMatchId && selectedPlayer && dragStart && dragCurrent) {
-        const dx = dragStart.x - dragCurrent.x;
-        const dy = dragStart.y - dragCurrent.y;
-        const power = Math.sqrt(dx * dx + dy * dy) * 0.15;
-        const clampedPower = Math.max(0, Math.min(power, 18));
-
-        if (clampedPower > 1) {
-          const length = Math.sqrt(dx * dx + dy * dy) || 1;
-          const velX = (dx / length) * clampedPower;
-          const velY = (dy / length) * clampedPower;
-          const playerIndex = next.players.findIndex((p) => p.team === selectedPlayer.team && p.number === selectedPlayer.number);
-          if (playerIndex !== -1) {
-            // Apply shot locally for immediate animation feedback
-            // Uses same physics as server (simulateStep) so result should match
-            shotInitializedRef.current = true;
-            next.players[playerIndex] = { ...next.players[playerIndex], vel: { x: velX, y: velY } };
-            next.phase = 'shooting';
-            next.activeShotPlayer = playerIndex;
-            next.activeShotTouchedBall = false;
-            next.activeShotCommittedFoul = false;
-            next.selectedPlayer = null;
-            next.dragStart = null;
-            next.dragCurrent = null;
-            void submitShot(playerIndex, velX, velY);
-          }
-        } else {
-          next.selectedPlayer = null;
-          next.dragStart = null;
-          next.dragCurrent = null;
-        }
-      } else {
-        handleMouseUp(next);
+      if (activeMatchId) {
+        next.selectedPlayer = null;
+        next.dragStart = null;
+        next.dragCurrent = null;
+        return next;
       }
 
+      handleMouseUp(next);
       return next;
     });
-  }, [activeChallenge, activeMatchId, localTeam, submitShot]);
+
+    if (shotCandidate) {
+      console.info('[online-shot][app] submitting-shot', shotCandidate);
+      void submitShot(shotCandidate.playerTeam, shotCandidate.playerNumber, shotCandidate.velX, shotCandidate.velY);
+    } else {
+      console.warn('[online-shot][app] no-shot-candidate');
+    }
+  }, [activeChallenge, activeMatchId, isAnimatingShot, isSubmittingShot, localTeam, matchState, submitShot]);
 
   const resetGame = () => {
     setGameState(createInitialState());
@@ -552,16 +654,27 @@ export default function App() {
     return `${value.slice(0, 8)}...${value.slice(-6)}`;
   };
 
-  const homeAlias = activeChallenge?.direction === 'outgoing'
-    ? session.profile?.name || 'Local'
-    : activeChallenge?.direction === 'incoming'
-      ? activeChallenge.rivalName || 'Rival'
-      : 'Local';
-  const awayAlias = activeChallenge?.direction === 'outgoing'
-    ? activeChallenge.rivalName || 'Rival'
-    : activeChallenge?.direction === 'incoming'
+  const formatRemaining = (expirationAt: number) => {
+    const ms = expirationAt - Date.now();
+    if (ms <= 0) return 'Expirado';
+    const hours = Math.round(ms / (60 * 60 * 1000));
+    if (hours < 1) return 'Menos de 1h';
+    if (hours < 24) return `${hours}h`;
+    return `${Math.round(hours / 24)}d`;
+  };
+
+  const homeAlias = activeMatchMeta?.homeName
+    || (activeChallenge?.direction === 'outgoing'
       ? session.profile?.name || 'Local'
-      : 'Máquina';
+      : activeChallenge?.direction === 'incoming'
+        ? activeChallenge.rivalName || 'Rival'
+        : 'Local');
+  const awayAlias = activeMatchMeta?.awayName
+    || (activeChallenge?.direction === 'outgoing'
+      ? activeChallenge.rivalName || 'Rival'
+      : activeChallenge?.direction === 'incoming'
+        ? session.profile?.name || 'Local'
+        : 'Máquina');
 
   const turnText = activeChallenge
     ? gameState.turn === 'home'
@@ -583,6 +696,14 @@ export default function App() {
           ? session.profile?.avatarUrl || `https://api.dicebear.com/9.x/shapes/svg?seed=${session.profile?.pubkey || 'local'}`
           : rivalAvatarUrl || rivalFallbackAvatar,
       }
+    : activeMatchMeta
+      ? {
+          name: homeAlias,
+          pubkey: activeMatchMeta.homePubkey,
+          avatarUrl: activeMatchMeta.homePubkey === session.profile?.pubkey
+            ? session.profile?.avatarUrl || `https://api.dicebear.com/9.x/shapes/svg?seed=${session.profile?.pubkey || 'local'}`
+            : rivalAvatarUrl || rivalFallbackAvatar,
+        }
     : session.profile;
 
   const awayIdentity = activeChallenge
@@ -593,6 +714,14 @@ export default function App() {
           ? rivalAvatarUrl || rivalFallbackAvatar
           : session.profile?.avatarUrl || `https://api.dicebear.com/9.x/shapes/svg?seed=${session.profile?.pubkey || 'away'}`,
       }
+    : activeMatchMeta
+      ? {
+          name: awayAlias,
+          pubkey: activeMatchMeta.awayPubkey,
+          avatarUrl: activeMatchMeta.awayPubkey === session.profile?.pubkey
+            ? session.profile?.avatarUrl || `https://api.dicebear.com/9.x/shapes/svg?seed=${session.profile?.pubkey || 'away'}`
+            : rivalAvatarUrl || rivalFallbackAvatar,
+        }
     : {
         name: 'Máquina',
         pubkey: 'training-bot',
@@ -600,12 +729,12 @@ export default function App() {
       };
 
   const winnerName = gameState.winner === 'home' ? homeAlias : awayAlias;
+  const displayedScore = activeMatchId && matchState ? matchState.score : gameState.score;
   const localWon = Boolean(activeChallenge && localTeam && gameState.winner && localTeam === gameState.winner);
   const rematchRequestedBy = activeMatchMeta?.rematchRequestedBy || null;
   const rematchMatchId = activeMatchMeta?.rematchMatchId || null;
   const rematchRejectedBy = activeMatchMeta?.rematchRejectedBy || null;
   const terminatedBy = activeMatchMeta?.terminatedBy || null;
-  const terminatedBySelf = Boolean(localPubkey && terminatedBy === localPubkey);
   const terminatedByOther = Boolean(terminatedBy && localPubkey && terminatedBy !== localPubkey);
   const terminatorName = terminatedBy === homeIdentity?.pubkey ? homeAlias : terminatedBy === awayIdentity?.pubkey ? awayAlias : 'El rival';
   const rematchRequestedBySelf = Boolean(localPubkey && rematchRequestedBy === localPubkey);
@@ -622,13 +751,13 @@ export default function App() {
           </h1>
           <p className={`${isMobilePortrait ? 'text-[10px] uppercase tracking-[0.15em] text-stone-500' : 'mt-1 text-xs uppercase tracking-[0.25em] text-stone-500'}`}>
             {isCreatingMatch
-              ? 'Creando partida...'
+              ? (isResumingMatch ? 'Reanudando partida...' : 'Creando partida...')
               : activeMatchId
-                ? `Turno de ${turnText.toLowerCase()}`
+                ? `Turno de ${turnText.toLowerCase()}${activeChallenge ? ` • vence en ${formatRemaining(activeChallenge.expirationAt).toLowerCase()}` : ''}`
                 : activeChallenge
                   ? activeChallenge.mode === 'wager'
-                    ? `Partida en juego: ${activeChallenge.amountSats} sats`
-                    : 'Partida amistosa activa'
+                    ? `Partida en juego: ${activeChallenge.amountSats} sats • vence en ${formatRemaining(activeChallenge.expirationAt).toLowerCase()}`
+                    : `Partida amistosa activa • vence en ${formatRemaining(activeChallenge.expirationAt).toLowerCase()}`
                   : session.status === 'connected'
                     ? `Identidad lista: ${session.method === 'nip07' ? 'NIP-07' : 'Bunker'}`
                     : 'Modo entrenamiento activo'}
@@ -684,7 +813,7 @@ export default function App() {
               <p className={`truncate uppercase text-stone-500 ${isMobilePortrait ? 'text-[8px] tracking-[0.15em]' : 'text-[10px] tracking-[0.2em]'}`}>{shortenPubkey(awayIdentity?.pubkey || '')}</p>
             </div>
             <div className={`rounded-lg bg-stone-900/60 ${isMobilePortrait ? 'px-2 py-0.5' : 'px-3 py-1'}`}>
-              <p className={`font-bold leading-none text-red-400 ${isMobilePortrait ? 'text-xl' : 'text-3xl'}`}>{gameState.score.away}</p>
+              <p className={`font-bold leading-none text-red-400 ${isMobilePortrait ? 'text-xl' : 'text-3xl'}`}>{displayedScore.away}</p>
             </div>
           </div>
 
@@ -696,7 +825,7 @@ export default function App() {
 
           <div className={`flex min-w-0 items-center justify-self-end ${isMobilePortrait ? 'gap-2' : 'gap-3'}`}>
             <div className={`rounded-lg bg-stone-900/60 ${isMobilePortrait ? 'px-2 py-0.5' : 'px-3 py-1'}`}>
-              <p className={`font-bold leading-none text-blue-400 ${isMobilePortrait ? 'text-xl' : 'text-3xl'}`}>{gameState.score.home}</p>
+              <p className={`font-bold leading-none text-blue-400 ${isMobilePortrait ? 'text-xl' : 'text-3xl'}`}>{displayedScore.home}</p>
             </div>
             <div className="min-w-0 text-right">
               <p className={`truncate font-bold uppercase tracking-wider text-stone-100 ${isMobilePortrait ? 'text-xs' : 'text-sm'}`}>{homeIdentity?.name || 'Local'}</p>
@@ -720,6 +849,7 @@ export default function App() {
           onMouseUp={onMouseUp}
           scale={scale}
           isRotated={isMobilePortrait}
+          isInteractionBlocked={isOnlineInteractionBlocked}
         />
       </div>
 
@@ -757,8 +887,23 @@ export default function App() {
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
           <div className="bg-stone-800 rounded-2xl p-8 text-center shadow-2xl max-w-sm mx-4 border border-stone-700">
             <LoaderCircle size={48} className="mx-auto mb-4 animate-spin text-emerald-400" />
-            <h2 className="text-xl font-bold mb-2">Creando partida...</h2>
-            <p className="text-sm text-stone-400">Conectando con el servidor y preparando el campo.</p>
+            <h2 className="text-xl font-bold mb-2">{isResumingMatch ? 'Reanudando partida...' : 'Creando partida...'}</h2>
+            <p className="text-sm text-stone-400">
+              {isResumingMatch
+                ? 'Conectando con el servidor y recuperando el estado actual.'
+                : 'Conectando con el servidor y preparando el campo.'}
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Shot calculation overlay */}
+      {isSubmittingShot && !isCreatingMatch && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/35">
+          <div className="mx-4 w-full max-w-xs rounded-2xl border border-stone-700 bg-stone-900/95 px-5 py-4 text-center shadow-2xl">
+            <LoaderCircle size={36} className="mx-auto mb-3 animate-spin text-amber-400" />
+            <h2 className="text-lg font-bold text-stone-100">Calculando tiro...</h2>
+            <p className="mt-1 text-sm text-stone-400">Esperá la respuesta del servidor antes de volver a jugar.</p>
           </div>
         </div>
       )}
@@ -796,7 +941,7 @@ export default function App() {
               {`¡${winnerName.toUpperCase()} CAMPEÓN!`}
             </h2>
             <p className="text-stone-400 mb-6">
-              {gameState.score.home} - {gameState.score.away}
+                {displayedScore.home} - {displayedScore.away}
             </p>
             {!activeChallenge ? (
               <button

@@ -27,7 +27,7 @@ export async function query<T extends Record<string, SqlPrimitive> = Record<stri
   ...values: SqlPrimitive[]
 ) {
   const sql = await getSql();
-  return (await sql<T>(strings, ...values)) as T[];
+  return (await sql(strings, ...values)) as T[];
 }
 
 export async function checkDatabaseConnection() {

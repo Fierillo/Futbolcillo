@@ -9,9 +9,16 @@ type CreateMatchBody = {
   accessToken: string;
   homePubkey: string;
   awayPubkey: string;
+  homeName?: string;
+  awayName?: string;
   mode: string;
   amountSats?: number;
 };
+
+function isGenericName(value: string | null | undefined) {
+  if (!value) return true;
+  return value === 'Local' || value === 'Rival' || value === 'Máquina' || /^Rival\s+[a-f0-9]{8}/i.test(value);
+}
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!requireMethod(req, res, 'POST')) return;
@@ -24,15 +31,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       res.status(400).json({ ok: false, error: 'Missing required fields' });
       return;
     }
-
-    await query`
-      insert into users (pubkey) values (${body.homePubkey})
-      on conflict (pubkey) do nothing
-    `;
-    await query`
-      insert into users (pubkey) values (${body.awayPubkey})
-      on conflict (pubkey) do nothing
-    `;
 
     let challengeRows = await query<{
       id: string;
@@ -79,11 +77,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       `;
     }
 
-    const existingMatchRows = await query<{ id: string }>`
-      select id from matches where challenge_id = ${body.challengeId} limit 1
+    const existingMatchRows = await query<{ id: string; home_name: string | null; away_name: string | null }>`
+      select id, home_name, away_name from matches where challenge_id = ${body.challengeId} limit 1
     `;
 
     if (existingMatchRows[0]) {
+      const existing = existingMatchRows[0];
+      const nextHomeName = isGenericName(existing.home_name) && body.homeName ? body.homeName : existing.home_name;
+      const nextAwayName = isGenericName(existing.away_name) && body.awayName ? body.awayName : existing.away_name;
+      if (nextHomeName !== existing.home_name || nextAwayName !== existing.away_name) {
+        await query`
+          update matches
+          set home_name = ${nextHomeName}, away_name = ${nextAwayName}, updated_at = now()
+          where id = ${existing.id}
+        `;
+      }
       res.status(200).json({ ok: true, matchId: existingMatchRows[0].id });
       return;
     }
@@ -92,8 +100,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const initialState = createInitialMatchState(body.homePubkey, body.awayPubkey);
 
     await query`
-      insert into matches (id, challenge_id, mode, status, home_pubkey, away_pubkey, current_state)
-      values (${matchId}, ${body.challengeId}, ${body.mode}, 'active', ${body.homePubkey}, ${body.awayPubkey}, ${JSON.stringify(initialState)}::jsonb)
+      insert into matches (id, challenge_id, mode, status, home_pubkey, away_pubkey, home_name, away_name, current_state)
+      values (${matchId}, ${body.challengeId}, ${body.mode}, 'active', ${body.homePubkey}, ${body.awayPubkey}, ${body.homeName || null}, ${body.awayName || null}, ${JSON.stringify(initialState)}::jsonb)
     `;
 
     await query`
