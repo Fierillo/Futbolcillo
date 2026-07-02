@@ -39,6 +39,8 @@ export function NostrGatewayModal({ onClose, linkedChallengeId = '', linkedChall
   const [qrUri, setQrUri] = useState('');
   const [qrLoading, setQrLoading] = useState(false);
   const [qrExpired, setQrExpired] = useState(false);
+  const [qrCopied, setQrCopied] = useState(false);
+  const [qrCopyError, setQrCopyError] = useState(false);
   const [step, setStep] = useState<ModalStep>(hasLinkedChallenge ? 'connect' : 'intro');
   const { session, connectNip07, connectBunker, startBunkerQr, cancelBunkerQr, disconnect, refreshProfile } = useNostrSession();
   const { linkedChallenge, loadLinkedChallenge, acceptLinkedChallenge, rejectLinkedChallenge } = useChallengeStore();
@@ -87,10 +89,40 @@ export function NostrGatewayModal({ onClose, linkedChallengeId = '', linkedChall
       console.info('[nostr-bunker-qr-modal]', 'qr-generated', { uri, uriLength: uri.length });
       setQrUri(uri);
       setQrExpired(false);
+      setQrCopied(false);
+      setQrCopyError(false);
     } finally {
       setQrLoading(false);
     }
   }, [startBunkerQr]);
+
+  const handleCopyQrUri = useCallback(async () => {
+    if (!qrUri) return;
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(qrUri);
+      } else {
+        const textarea = document.createElement('textarea');
+        textarea.value = qrUri;
+        textarea.setAttribute('readonly', 'true');
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        textarea.select();
+        textarea.setSelectionRange(0, textarea.value.length);
+        const ok = document.execCommand('copy');
+        document.body.removeChild(textarea);
+        if (!ok) throw new Error('copy failed');
+      }
+      setQrCopied(true);
+      setQrCopyError(false);
+      window.setTimeout(() => setQrCopied(false), 1500);
+    } catch {
+      setQrCopied(false);
+      setQrCopyError(true);
+      window.setTimeout(() => setQrCopyError(false), 2500);
+    }
+  }, [qrUri]);
 
   // QR expiry timer — notifies after 60s
   useEffect(() => {
@@ -100,6 +132,8 @@ export function NostrGatewayModal({ onClose, linkedChallengeId = '', linkedChall
       cancelBunkerQr();
       setQrExpired(true);
       setQrUri('');
+      setQrCopied(false);
+      setQrCopyError(false);
     }, 60_000);
     return () => clearTimeout(timer);
   }, [cancelBunkerQr, showQr]);
@@ -112,6 +146,8 @@ export function NostrGatewayModal({ onClose, linkedChallengeId = '', linkedChall
     setShowQr(false);
     setQrUri('');
     setQrExpired(false);
+    setQrCopied(false);
+    setQrCopyError(false);
   }, [cancelBunkerQr, session.error, session.method, session.status]);
 
   return (
@@ -308,11 +344,24 @@ export function NostrGatewayModal({ onClose, linkedChallengeId = '', linkedChall
                   {showQr && (
                     <div className="mt-3 flex flex-col items-center rounded-2xl border border-stone-700 bg-stone-950/70 p-3">
                       {bunkerQrUrl && (
-                        <img src={bunkerQrUrl} alt="QR para bunker" className="h-44 w-44 rounded-xl bg-white p-2" />
+                        <button
+                          type="button"
+                          onClick={() => void handleCopyQrUri()}
+                          onTouchEnd={() => void handleCopyQrUri()}
+                          className="rounded-xl transition-transform hover:scale-[1.01] focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                          aria-label="Copiar nostrconnect"
+                        >
+                          <img src={bunkerQrUrl} alt="QR para bunker" className="h-44 w-44 rounded-xl bg-white p-2" />
+                        </button>
                       )}
                       <p className="mt-2 text-center text-xs text-stone-500">
                         Escaneá desde tu signer remoto. La conexión se completará automáticamente.
                       </p>
+                      {!qrExpired && qrUri && (
+                        <p className={`mt-2 text-center text-xs font-semibold ${qrCopied ? 'text-emerald-300' : qrCopyError ? 'text-red-300' : 'text-sky-300'}`}>
+                          {qrCopied ? 'Nostrconnect copiado' : qrCopyError ? 'No se pudo copiar al portapapeles' : 'Tocá el QR para copiar el nostrconnect'}
+                        </p>
+                      )}
                       {qrExpired && (
                         <p className="mt-2 text-center text-xs text-amber-400">
                           QR expirado. Regenerá uno nuevo para reintentar.

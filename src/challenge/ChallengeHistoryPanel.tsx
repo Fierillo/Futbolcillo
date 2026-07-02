@@ -1,6 +1,5 @@
 import { useMemo, useState } from 'react';
 import { Check, Clock3, Copy, Loader, Play } from 'lucide-react';
-import { getPublicAppUrl } from '../config/public-app-url';
 import { useChallengeStore } from './store';
 import { useMatchStore } from '../match/store';
 import { useNostrSession } from '../nostr/session-store';
@@ -106,34 +105,23 @@ export function ChallengeHistoryPanel({ onAction }: Props) {
   } = useChallengeStore();
   const { matchState } = useMatchStore();
   const { session } = useNostrSession();
+  const [copiedChallengeId, setCopiedChallengeId] = useState<string | null>(null);
 
   const emptyText = useMemo(() => {
     if (selectedFilter === 'all') return 'Todavía no tenés desafíos guardados.';
     return 'No hay elementos para este filtro.';
   }, [selectedFilter]);
-  const [copiedChallengeId, setCopiedChallengeId] = useState<string | null>(null);
 
-  const shareChallenge = async (challenge: CachedChallenge) => {
-    const challengeUrl = `${getPublicAppUrl()}?challenge=${challenge.id}&token=${challenge.accessToken}&owner=${challenge.sourceOwnerPubkey || challenge.ownerPubkey}`;
-
-    if (navigator.share) {
-      try {
-        await navigator.share({
-          title: 'Desafío de Futbolcillo',
-          text: `Te pasé este desafío de Futbolcillo: ${challenge.id}`,
-          url: challengeUrl,
-        });
-        return;
-      } catch {
-        // Fall through to clipboard if the user cancels or share is unsupported by the current context.
-      }
+  const copyChallengeId = async (challengeId: string) => {
+    try {
+      await navigator.clipboard.writeText(challengeId);
+      setCopiedChallengeId(challengeId);
+      window.setTimeout(() => {
+        setCopiedChallengeId((current) => (current === challengeId ? null : current));
+      }, 1400);
+    } catch {
+      // ignore clipboard failures silently
     }
-
-    await navigator.clipboard.writeText(challengeUrl);
-    setCopiedChallengeId(challenge.id);
-    window.setTimeout(() => {
-      setCopiedChallengeId((current) => (current === challenge.id ? null : current));
-    }, 1500);
   };
 
   return (
@@ -167,91 +155,117 @@ export function ChallengeHistoryPanel({ onAction }: Props) {
             const rivalProfile = rivalProfiles[challenge.rivalPubkey];
             const rivalName = rivalProfile?.displayName || rivalProfile?.nip05 || challenge.rivalName;
             const rivalAvatar = rivalProfile?.avatarUrl || `https://api.dicebear.com/9.x/shapes/svg?seed=${challenge.rivalPubkey}`;
+            const localAvatar = session.profile?.avatarUrl || `https://api.dicebear.com/9.x/shapes/svg?seed=${session.profile?.pubkey || 'local-player'}`;
             const isActive = challenge.id === activeChallengeId;
-            const isPending = !isFinishedState(challenge.state) && challenge.state !== 'accepted' && challenge.state !== 'in_match';
-            const challengeUrl = `${getPublicAppUrl()}?challenge=${challenge.id}&token=${challenge.accessToken}`;
             const isOutgoing = challenge.direction === 'outgoing';
-            const homeAlias = isOutgoing ? (session.profile?.name || 'Local') : (challenge.rivalName || 'Rival');
-            const awayAlias = isOutgoing ? (challenge.rivalName || 'Rival') : (session.profile?.name || 'Local');
-            const turnAlias = isActive && matchState
-              ? matchState.turn === 'home'
-                ? homeAlias
-                : awayAlias
+            const localAlias = session.profile?.name || 'Local';
+            const homeAlias = isOutgoing ? localAlias : rivalName || 'Rival';
+            const awayAlias = isOutgoing ? rivalName || 'Rival' : localAlias;
+            const homeAvatar = isOutgoing ? localAvatar : rivalAvatar;
+            const awayAvatar = isOutgoing ? rivalAvatar : localAvatar;
+            const liveScore = isActive && matchState
+              ? `${homeAlias} ${matchState.score.home} - ${matchState.score.away} ${awayAlias}`
               : null;
+            const persistedScore = challenge.scoreHome != null && challenge.scoreAway != null
+              ? `${homeAlias} ${challenge.scoreHome} - ${challenge.scoreAway} ${awayAlias}`
+              : null;
+            const scoreLabel = liveScore || persistedScore;
+            const showExpiryLabel = challenge.state === 'sent' || challenge.state === 'received' || challenge.state === 'accepted';
+            const resultLabel = challenge.state === 'finalized'
+              ? challenge.winnerPubkey === session.pubkey
+                ? 'Victoria'
+                : challenge.winnerPubkey
+                  ? 'Derrota'
+                  : 'Finalizado'
+              : challenge.state === 'terminated'
+                ? challenge.winnerPubkey === session.pubkey
+                  ? 'Victoria'
+                  : challenge.winnerPubkey
+                    ? 'Derrota'
+                    : 'Cancelado'
+                : null;
+            const resultColor = resultLabel === 'Victoria'
+              ? 'text-emerald-400'
+              : resultLabel === 'Derrota'
+                ? 'text-red-400'
+                : 'text-stone-400';
+            const modeLabel = challenge.mode === 'wager' ? `Apuesta por ${challenge.amountSats} sats` : 'Amistoso';
+            const titleLabel = resultLabel
+              || (challenge.state === 'in_match'
+                ? 'En partida'
+                : challenge.state === 'received'
+                  ? 'Desafío recibido'
+                  : challenge.state === 'sent'
+                    ? 'Esperando rival'
+                    : challenge.state === 'accepted'
+                      ? 'Listo para jugar'
+                      : challenge.state === 'rejected'
+                        ? 'Rechazado'
+                        : challenge.state === 'expired'
+                          ? 'Expirado'
+                          : 'Desafío');
+            const titleColor = resultLabel
+              ? resultColor
+              : challenge.state === 'in_match'
+                ? 'text-amber-400'
+                : challenge.state === 'received'
+                  ? 'text-emerald-400'
+                  : challenge.state === 'sent' || challenge.state === 'accepted'
+                    ? 'text-sky-400'
+                    : 'text-stone-300';
 
             return (
               <div
                 key={challenge.id}
-                className={`grid grid-cols-[1fr_auto] gap-3 rounded-xl border px-3 py-2.5 transition-colors ${isActive ? 'border-amber-500/60 bg-amber-950/20' : 'border-stone-700 bg-stone-900/60'}`}
+                className={`relative rounded-xl border px-3 py-3 transition-colors ${isActive ? 'border-amber-500/60 bg-amber-950/20' : 'border-stone-700 bg-stone-900/60'}`}
               >
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2 text-sm text-stone-100">
-                    <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-widest ${challenge.mode === 'wager' ? 'bg-amber-900/60 text-amber-200' : 'bg-emerald-900/60 text-emerald-200'}`}>
-                      {challenge.mode === 'wager' ? 'Apuesta' : 'Amistoso'}
-                    </span>
-                    <div className="flex min-w-0 items-center gap-2">
-                      <img src={rivalAvatar} alt={rivalName} className="h-6 w-6 rounded-full object-cover" />
-                      <span className="truncate font-semibold">{rivalName}</span>
+                <span className={`absolute right-3 top-3 max-w-[45%] rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-widest ${challenge.mode === 'wager' ? 'bg-amber-900/60 text-amber-200' : 'bg-emerald-900/60 text-emerald-200'}`}>
+                  {modeLabel}
+                </span>
+
+                <div className="flex min-w-0 flex-col items-center gap-3 pt-6 text-center sm:pt-2">
+                  <div className={`text-sm font-semibold uppercase tracking-[0.26em] ${titleColor}`}>
+                    {titleLabel}
+                  </div>
+                  <div className="grid w-full grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-3">
+                    <div className="flex min-w-0 items-center justify-end">
+                      <img src={homeAvatar} alt={homeAlias} className="h-9 w-9 rounded-full border border-stone-700 object-cover" />
+                    </div>
+                    <div className="rounded-xl bg-stone-950/80 px-3 py-2 text-lg font-black tracking-wide text-amber-300 sm:text-2xl">
+                      {scoreLabel || 'vs'}
+                    </div>
+                    <div className="flex min-w-0 items-center">
+                      <img src={awayAvatar} alt={awayAlias} className="h-9 w-9 rounded-full border border-stone-700 object-cover" />
                     </div>
                   </div>
-                  <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs uppercase tracking-wider text-stone-500">
-                    {challenge.direction === 'incoming' && isPending && (
-                      <span className="text-emerald-400">Entrante</span>
-                    )}
-                    {challenge.direction === 'outgoing' && isPending && (
-                      <span className="text-sky-400">Enviado</span>
-                    )}
-                    {challenge.state === 'in_match' && (
-                      <span className="text-amber-400">En partida • Turno: {turnAlias || 'calculando...'}</span>
-                    )}
-                    {challenge.state === 'finalized' && challenge.winnerPubkey && (
-                      <span className={challenge.winnerPubkey === session.pubkey ? 'text-emerald-400' : 'text-red-400'}>
-                        {challenge.winnerPubkey === session.pubkey ? 'Ganaste' : 'Perdiste'}
-                        {challenge.scoreHome != null && challenge.scoreAway != null && (
-                          <span className="ml-1.5 font-mono">{challenge.scoreHome} - {challenge.scoreAway}</span>
-                        )}
-                      </span>
-                    )}
-                    {challenge.state === 'finalized' && !challenge.winnerPubkey && (
-                      <span className="text-stone-400">Finalizado</span>
-                    )}
-                    {challenge.state === 'terminated' && (
-                      <span className="text-red-400">Terminado</span>
-                    )}
-                    {challenge.state === 'rejected' && (
-                      <span className="text-stone-400">Rechazado</span>
-                    )}
-                    {challenge.state === 'expired' && (
-                      <span className="text-stone-400">Expirado</span>
-                    )}
-                    {challenge.mode === 'wager' && <span>{challenge.amountSats} sats</span>}
-                  </div>
-                  <div className="mt-2 flex items-center gap-2">
-                    <span className="truncate font-mono text-sm font-bold tracking-wide text-amber-300">
-                      {challenge.id}
-                    </span>
+                  <div className="flex w-full flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                     <button
                       type="button"
-                      onClick={() => void shareChallenge(challenge)}
-                      className="flex shrink-0 items-center gap-1 rounded-lg bg-stone-700 px-2 py-1 text-[11px] font-semibold text-white transition-colors hover:bg-stone-600"
+                      onClick={() => void copyChallengeId(challenge.id)}
+                      className={`group inline-flex items-center justify-center gap-2 self-center rounded-lg border px-3 py-1.5 text-xs font-mono font-bold tracking-[0.16em] transition-all sm:self-auto ${copiedChallengeId === challenge.id ? 'scale-[1.02] border-emerald-500/60 bg-emerald-950/40 text-emerald-300' : 'border-stone-700 bg-stone-950/60 text-amber-300 hover:border-amber-500/40 hover:text-amber-200'}`}
                     >
-                      {copiedChallengeId === challenge.id ? <Check size={12} /> : <Copy size={12} />}
-                      {copiedChallengeId === challenge.id ? 'Copiado' : 'Copiar'}
+                      {copiedChallengeId === challenge.id ? <Check size={13} /> : <Copy size={13} className="transition-transform group-hover:scale-110" />}
+                      <span>{challenge.id}</span>
+                      <span className={`overflow-hidden text-[10px] font-semibold uppercase tracking-[0.18em] transition-all ${copiedChallengeId === challenge.id ? 'max-w-16 opacity-100' : 'max-w-0 opacity-0'}`}>
+                        Copiado
+                      </span>
                     </button>
+                    <div className="flex flex-col items-center gap-2 sm:items-end">
+                      {showExpiryLabel && (
+                        <div className="flex items-center gap-1.5 text-xs text-stone-400">
+                          <Clock3 size={12} />
+                          <span>Vence en {formatRemaining(challenge.expirationAt)}</span>
+                        </div>
+                      )}
+                      <ChallengeActionButton
+                        challenge={challenge}
+                        isActive={isActive}
+                        onAccept={acceptIncomingChallenge}
+                        onEnter={enterAcceptedChallenge}
+                        onAction={onAction}
+                      />
+                    </div>
                   </div>
-                </div>
-                <div className="flex flex-col items-end justify-between gap-1.5">
-                  <div className="flex items-center gap-1.5 text-xs text-stone-400">
-                    <Clock3 size={12} />
-                    <span>{formatRemaining(challenge.expirationAt)}</span>
-                  </div>
-                  <ChallengeActionButton
-                    challenge={challenge}
-                    isActive={isActive}
-                    onAccept={acceptIncomingChallenge}
-                    onEnter={enterAcceptedChallenge}
-                    onAction={onAction}
-                  />
                 </div>
               </div>
             );

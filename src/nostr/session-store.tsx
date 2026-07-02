@@ -3,6 +3,7 @@ import NDK, { NDKNip07Signer, NDKNip46Signer, type NDKSigner } from '@nostr-dev-
 import { cacheDb } from '../cache/db';
 import { getNostrClient } from './client';
 import { Nip46NdkSigner } from './nip46-ndk-signer';
+import type { PendingNostrConnectSession } from './nip46-client';
 import type { CachedProfile, ScoreboardIdentity } from '../profile/types';
 import type { NostrConnectionMethod, NostrSessionState } from './types';
 
@@ -18,14 +19,69 @@ interface NostrSessionContextValue {
 }
 
 const STORAGE_KEY = 'futbolcillo.nostr-session';
+const PENDING_BUNKER_QR_KEY = 'futbolcillo.pending-bunker-qr';
 const NOSTR_CONNECT_RELAYS = [
   'wss://relay.nsec.app',
   'wss://relay.damus.io',
   'wss://relay.snort.social',
 ];
+const BUNKER_CONNECT_TIMEOUT_MS = 120_000;
 
 function logBunkerQr(step: string, details?: Record<string, unknown>) {
   console.info('[nostr-bunker-qr]', step, details ?? {});
+}
+
+type PersistedPendingBunkerQr = {
+  uri: string;
+  relay: string;
+  clientSecret: number[];
+  secret: string;
+  relays: string[];
+  createdAt: number;
+};
+
+function savePendingBunkerQr(pending: PendingNostrConnectSession) {
+  const payload: PersistedPendingBunkerQr = {
+    uri: pending.uri,
+    relay: pending.relay,
+    clientSecret: Array.from(pending.clientSecret),
+    secret: pending.secret,
+    relays: pending.relays,
+    createdAt: Date.now(),
+  };
+  localStorage.setItem(PENDING_BUNKER_QR_KEY, JSON.stringify(payload));
+}
+
+function clearPendingBunkerQr() {
+  localStorage.removeItem(PENDING_BUNKER_QR_KEY);
+}
+
+function loadPendingBunkerQr(): PendingNostrConnectSession | null {
+  const raw = localStorage.getItem(PENDING_BUNKER_QR_KEY);
+  if (!raw) return null;
+
+  try {
+    const parsed = JSON.parse(raw) as PersistedPendingBunkerQr;
+    if (!parsed.uri || !parsed.secret || !parsed.relays?.length || !parsed.clientSecret?.length) {
+      clearPendingBunkerQr();
+      return null;
+    }
+    if (Date.now() - parsed.createdAt > 5 * 60 * 1000) {
+      clearPendingBunkerQr();
+      return null;
+    }
+
+    return {
+      uri: parsed.uri,
+      relay: parsed.relay,
+      clientSecret: Uint8Array.from(parsed.clientSecret),
+      secret: parsed.secret,
+      relays: parsed.relays,
+    };
+  } catch {
+    clearPendingBunkerQr();
+    return null;
+  }
 }
 
 const defaultSession: NostrSessionState = {
@@ -264,7 +320,7 @@ export function NostrSessionProvider({ children }: { children: ReactNode }) {
       await ndk.connect(3000);
       const signer = NDKNip46Signer.bunker(ndk, token);
       ndk.signer = signer;
-      const user = await withTimeout(signer.user(), 12000);
+      const user = await withTimeout(signer.user(), BUNKER_CONNECT_TIMEOUT_MS);
       const signerPayload = signer.toPayload();
       await setConnectedSession(user.pubkey, 'bunker', ndk, signerPayload);
     } catch (error) {
@@ -278,62 +334,81 @@ export function NostrSessionProvider({ children }: { children: ReactNode }) {
     }
   }, [setConnectedSession]);
 
+  const waitForPendingBunkerQr = useCallback(async (pending: PendingNostrConnectSession, abortController: AbortController) => {
+    try {
+      logBunkerQr('waiting-for-remote-signer');
+      const ndk = getNostrClient();
+      const signer = await Nip46NdkSigner.fromPending(ndk, pending, 300000, abortController.signal, logBunkerQr);
+      ndk.signer = signer;
+      const user = await withTimeout(signer.user(), 15000);
+      logBunkerQr('remote-signer-ready', { pubkey: user.pubkey });
+      await setConnectedSession(user.pubkey, 'bunker', ndk, signer.toPayload(), 'nostr-tools-nip46');
+      clearPendingBunkerQr();
+      setPendingBunkerAbortController(null);
+      logBunkerQr('session-connected', { pubkey: user.pubkey });
+    } catch (error) {
+      if (abortController.signal.aborted) {
+        logBunkerQr('connection-cancelled');
+        return;
+      }
+
+      logBunkerQr('connection-failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      clearPendingBunkerQr();
+      setSession((prev) => ({
+        ...prev,
+        status: 'error',
+        method: 'bunker',
+        error: error instanceof Error ? error.message : 'No se pudo conectar con QR.',
+      }));
+      setPendingBunkerAbortController(null);
+    }
+  }, [setConnectedSession]);
+
+  useEffect(() => {
+    if (session.status === 'connected') return;
+    if (pendingBunkerAbortController) return;
+
+    const pending = loadPendingBunkerQr();
+    if (!pending) return;
+
+    logBunkerQr('resuming-pending-qr', { relay: pending.relay, relays: pending.relays });
+    setSession((prev) => ({ ...prev, status: 'connecting', method: 'bunker', error: '' }));
+    const abortController = new AbortController();
+    setPendingBunkerAbortController(abortController);
+    void waitForPendingBunkerQr(pending, abortController);
+  }, [pendingBunkerAbortController, session.status, waitForPendingBunkerQr]);
+
   const startBunkerQr = useCallback(async () => {
     logBunkerQr('start-requested', { hasPendingSigner: Boolean(pendingBunkerAbortController), relays: NOSTR_CONNECT_RELAYS });
     pendingBunkerAbortController?.abort();
+    clearPendingBunkerQr();
 
     const abortController = new AbortController();
     setPendingBunkerAbortController(abortController);
 
     const pending = Nip46NdkSigner.createPending(NOSTR_CONNECT_RELAYS, 'Futbolcillo');
+    savePendingBunkerQr(pending);
     logBunkerQr('qr-ready', {
       uri: pending.uri,
       uriLength: pending.uri.length,
       relays: pending.relays,
     });
 
-    const waitForConnection = async () => {
-      try {
-        logBunkerQr('waiting-for-remote-signer');
-        const ndk = getNostrClient();
-        const signer = await Nip46NdkSigner.fromPending(ndk, pending, 300000, abortController.signal, logBunkerQr);
-        ndk.signer = signer;
-        const user = await withTimeout(signer.user(), 15000);
-        logBunkerQr('remote-signer-ready', { pubkey: user.pubkey });
-        await setConnectedSession(user.pubkey, 'bunker', ndk, signer.toPayload(), 'nostr-tools-nip46');
-        setPendingBunkerAbortController(null);
-        logBunkerQr('session-connected', { pubkey: user.pubkey });
-      } catch (error) {
-        if (abortController.signal.aborted) {
-          logBunkerQr('connection-cancelled');
-          return;
-        }
-
-        logBunkerQr('connection-failed', {
-          error: error instanceof Error ? error.message : String(error),
-        });
-        setSession((prev) => ({
-          ...prev,
-          status: 'error',
-          method: 'bunker',
-          error: error instanceof Error ? error.message : 'No se pudo conectar con QR.',
-        }));
-        setPendingBunkerAbortController(null);
-      }
-    };
-
-    void waitForConnection();
+    void waitForPendingBunkerQr(pending, abortController);
 
     return {
       uri: pending.uri,
       relay: pending.relay,
     };
-  }, [pendingBunkerAbortController, setConnectedSession]);
+  }, [pendingBunkerAbortController, waitForPendingBunkerQr]);
 
   const cancelBunkerQr = useCallback(() => {
     if (!pendingBunkerAbortController) return;
     logBunkerQr('cancel-pending-qr');
     pendingBunkerAbortController.abort();
+    clearPendingBunkerQr();
     setPendingBunkerAbortController(null);
   }, [pendingBunkerAbortController]);
 
@@ -345,6 +420,7 @@ export function NostrSessionProvider({ children }: { children: ReactNode }) {
     localStorage.removeItem(STORAGE_KEY);
     logBunkerQr('disconnect', { hadPendingSigner: Boolean(pendingBunkerAbortController) });
     pendingBunkerAbortController?.abort();
+    clearPendingBunkerQr();
     const ndk = getNostrClient();
     void (ndk.signer as { close?: () => Promise<void> | void } | undefined)?.close?.();
     ndk.signer = undefined;

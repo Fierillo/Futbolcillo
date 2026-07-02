@@ -15,6 +15,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return;
     }
 
+    await query`
+      delete from challenges
+      where expires_at <= now()
+        and (owner_pubkey = ${pubkey} or rival_pubkey = ${pubkey})
+        and state in ('sent', 'received', 'accepted')
+    `;
+
     const owned = await query<{
       id: string;
       access_token: string;

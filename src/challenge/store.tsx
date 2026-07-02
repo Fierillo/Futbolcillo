@@ -2,11 +2,11 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, t
 import NDK, { NDKEvent, NDKKind } from '@nostr-dev-kit/ndk';
 import { nip19 } from 'nostr-tools';
 import { cacheDb } from '../cache/db';
-import { getPublicAppUrl } from '../config/public-app-url';
 import { getNostrClient } from '../nostr/client';
 import { useNostrSession } from '../nostr/session-store';
 import type { CachedChallenge, ChallengeFilter, ChallengeMode, ChallengeState } from './types';
 import type { CachedProfile } from '../profile/types';
+import { buildChallengeUrl } from './url';
 
 type ChallengeDraft = {
   rivalInput: string;
@@ -39,6 +39,7 @@ interface ChallengeContextValue {
   finalizeChallenge: (challengeId: string) => Promise<void>;
   finalizeChallengeWithResult: (challengeId: string, winnerPubkey: string | null, scoreHome: number, scoreAway: number) => Promise<void>;
   updateChallengeState: (challengeId: string, state: ChallengeState) => Promise<void>;
+  syncChallengeProgress: (challengeId: string, state: ChallengeState, scoreHome: number, scoreAway: number) => Promise<void>;
   setActiveChallengeById: (challengeId: string) => Promise<void>;
   challengeError: string;
   clearChallengeError: () => void;
@@ -110,6 +111,10 @@ function isFinishedState(state: ChallengeState) {
   return state === 'rejected' || state === 'expired' || state === 'cancelled' || state === 'finalized' || state === 'terminated';
 }
 
+function resolveRivalName(pubkey: string, profile?: CachedProfile | null, fallbackName?: string | null) {
+  return profile?.displayName || profile?.nip05 || fallbackName || `Rival ${pubkey.slice(0, 8)}`;
+}
+
 async function sendChallengeDirectMessage(
   ndk: NDK,
   ownerPubkey: string,
@@ -117,8 +122,7 @@ async function sendChallengeDirectMessage(
   rivalName: string
 ) {
   const recipient = ndk.getUser({ pubkey: challenge.rivalPubkey });
-  const siteUrl = getPublicAppUrl();
-  const challengeUrl = `${siteUrl}?challenge=${challenge.id}&token=${challenge.accessToken}&owner=${ownerPubkey}`;
+  const challengeUrl = buildChallengeUrl(challenge.id, challenge.accessToken, ownerPubkey);
   const message =
     challenge.mode === 'wager'
       ? [
@@ -175,6 +179,12 @@ export function ChallengeProvider({ children }: { children: ReactNode }) {
   const [draft, setDraftState] = useState<ChallengeDraft>(defaultDraft);
   const [challengeError, setChallengeError] = useState('');
   const [selectedFilter, setSelectedFilter] = useState<ChallengeFilter>('all');
+
+  const patchLocalChallenge = useCallback((challengeId: string, patch: Partial<CachedChallenge>) => {
+    setChallenges((prev) => prev.map((challenge) => (challenge.id === challengeId ? { ...challenge, ...patch } : challenge)));
+    setActiveChallenge((prev) => (prev && prev.id === challengeId ? { ...prev, ...patch } : prev));
+    setLinkedChallenge((prev) => (prev && prev.id === challengeId ? { ...prev, ...patch } : prev));
+  }, []);
 
   const refreshFollowingRivals = useCallback(async () => {
     if (!session.pubkey) {
@@ -261,10 +271,15 @@ export function ChallengeProvider({ children }: { children: ReactNode }) {
         };
 
         if (data.ok) {
+          const serverChallengeIds = new Set<string>();
+
           for (const c of data.owned) {
+            serverChallengeIds.add(c.id);
             const existing = await cacheDb.challenges.get(c.id);
+            const rivalProfile = await cacheDb.profiles.get(c.rivalPubkey);
             const updatedAt = new Date(c.updatedAt).getTime();
-            if (!existing || updatedAt > existing.updatedAt) {
+            const hasServerResult = c.winnerPubkey != null || c.scoreHome != null || c.scoreAway != null;
+            if (!existing || updatedAt > existing.updatedAt || hasServerResult) {
               await cacheDb.challenges.put({
                 id: c.id,
                 accessToken: c.accessToken,
@@ -274,22 +289,24 @@ export function ChallengeProvider({ children }: { children: ReactNode }) {
                 mode: c.mode as ChallengeMode,
                 state: c.state as ChallengeState,
                 rivalPubkey: c.rivalPubkey,
-                rivalName: existing?.rivalName || `Rival ${c.rivalPubkey.slice(0, 8)}`,
+                rivalName: resolveRivalName(c.rivalPubkey, rivalProfile, existing?.rivalName),
                 amountSats: c.amountSats,
                 expirationAt: new Date(c.expiresAt).getTime(),
                 createdAt: new Date(c.createdAt).getTime(),
                 updatedAt,
-                winnerPubkey: c.winnerPubkey || undefined,
-                scoreHome: c.scoreHome ?? undefined,
-                scoreAway: c.scoreAway ?? undefined,
+                winnerPubkey: c.winnerPubkey || existing?.winnerPubkey || undefined,
+                scoreHome: c.scoreHome ?? existing?.scoreHome ?? undefined,
+                scoreAway: c.scoreAway ?? existing?.scoreAway ?? undefined,
               });
             }
           }
 
           for (const c of data.incoming) {
+            serverChallengeIds.add(c.id);
             const existing = await cacheDb.challenges.get(c.id);
             const updatedAt = new Date(c.updatedAt).getTime();
-            if (!existing || updatedAt > existing.updatedAt) {
+            const hasServerResult = c.winnerPubkey != null || c.scoreHome != null || c.scoreAway != null;
+            if (!existing || updatedAt > existing.updatedAt || hasServerResult) {
               const senderProfile = await cacheDb.profiles.get(c.ownerPubkey);
               await cacheDb.challenges.put({
                 id: c.id,
@@ -300,16 +317,22 @@ export function ChallengeProvider({ children }: { children: ReactNode }) {
                 mode: c.mode as ChallengeMode,
                 state: c.state as ChallengeState,
                 rivalPubkey: c.ownerPubkey,
-                rivalName: senderProfile?.displayName || `Rival ${c.ownerPubkey.slice(0, 8)}`,
+                rivalName: resolveRivalName(c.ownerPubkey, senderProfile, existing?.rivalName),
                 amountSats: c.amountSats,
                 expirationAt: new Date(c.expiresAt).getTime(),
                 createdAt: new Date(c.createdAt).getTime(),
                 updatedAt,
-                winnerPubkey: c.winnerPubkey || undefined,
-                scoreHome: c.scoreHome ?? undefined,
-                scoreAway: c.scoreAway ?? undefined,
+                winnerPubkey: c.winnerPubkey || existing?.winnerPubkey || undefined,
+                scoreHome: c.scoreHome ?? existing?.scoreHome ?? undefined,
+                scoreAway: c.scoreAway ?? existing?.scoreAway ?? undefined,
               });
             }
+          }
+
+          const cachedIds = await cacheDb.challenges.where('ownerPubkey').equals(session.pubkey).primaryKeys();
+          const staleIds = cachedIds.filter((id) => !serverChallengeIds.has(String(id))).map((id) => String(id));
+          if (staleIds.length > 0) {
+            await cacheDb.challenges.bulkDelete(staleIds);
           }
         }
       }
@@ -323,22 +346,41 @@ export function ChallengeProvider({ children }: { children: ReactNode }) {
     ]);
 
     const now = Date.now();
-    const activeRecords = records.filter((record) => record.expirationAt > now);
-    const expiredIds = records.filter((record) => record.expirationAt <= now).map((record) => record.id);
+    const removableExpiredIds = records
+      .filter((record) => record.expirationAt <= now && (record.state === 'sent' || record.state === 'received' || record.state === 'accepted'))
+      .map((record) => record.id);
 
-    if (expiredIds.length > 0) {
-      await cacheDb.challenges.bulkDelete(expiredIds);
+    if (removableExpiredIds.length > 0) {
+      await cacheDb.challenges.bulkDelete(removableExpiredIds);
     }
+
+    const visibleRecords = records.filter((record) => !removableExpiredIds.includes(record.id));
 
     const filteredProfiles = profiles.filter((profile) => profile.pubkey !== session.pubkey);
 
     filteredProfiles.sort((a, b) => {
-      const lastA = activeRecords.find((record) => record.rivalPubkey === a.pubkey)?.updatedAt ?? 0;
-      const lastB = activeRecords.find((record) => record.rivalPubkey === b.pubkey)?.updatedAt ?? 0;
+      const lastA = visibleRecords.find((record) => record.rivalPubkey === a.pubkey)?.updatedAt ?? 0;
+      const lastB = visibleRecords.find((record) => record.rivalPubkey === b.pubkey)?.updatedAt ?? 0;
       return lastB - lastA || b.updatedAt - a.updatedAt;
     });
 
-    setChallenges(activeRecords);
+    const profilesByPubkey = profiles.reduce<Record<string, CachedProfile>>((acc, profile) => {
+      acc[profile.pubkey] = profile;
+      return acc;
+    }, {});
+
+    const normalizedRecords = visibleRecords.map((record) => {
+      const profile = profilesByPubkey[record.rivalPubkey];
+      const rivalName = resolveRivalName(record.rivalPubkey, profile, record.rivalName);
+      return rivalName === record.rivalName ? record : { ...record, rivalName };
+    });
+
+    const dirtyRecords = normalizedRecords.filter((record, index) => record !== visibleRecords[index]);
+    if (dirtyRecords.length > 0) {
+      await cacheDb.challenges.bulkPut(dirtyRecords);
+    }
+
+    setChallenges(normalizedRecords);
     setRecentRivals(filteredProfiles.slice(0, 6));
   }, [session.pubkey]);
 
@@ -407,7 +449,7 @@ export function ChallengeProvider({ children }: { children: ReactNode }) {
             await cacheDb.profiles.put({
               pubkey: senderPubkey,
               avatarUrl: `https://api.dicebear.com/9.x/shapes/svg?seed=${senderPubkey}`,
-              displayName: payload.rivalName || `Rival ${senderPubkey.slice(0, 8)}`,
+              displayName: resolveRivalName(senderPubkey, null, payload.rivalName),
               nip05: '',
               lud16: '',
               updatedAt: Date.now(),
@@ -423,7 +465,7 @@ export function ChallengeProvider({ children }: { children: ReactNode }) {
             mode: payload.mode,
             state: 'received',
             rivalPubkey: senderPubkey,
-            rivalName: existingProfile?.displayName || payload.rivalName || `Rival ${senderPubkey.slice(0, 8)}`,
+            rivalName: resolveRivalName(senderPubkey, existingProfile, payload.rivalName),
             amountSats: payload.amountSats,
             expirationAt: payload.expirationAt,
             createdAt: payload.createdAt,
@@ -621,7 +663,7 @@ export function ChallengeProvider({ children }: { children: ReactNode }) {
           mode: challenge.mode,
           state: challenge.state,
           rivalPubkey,
-          rivalName: senderProfile?.displayName || `Rival ${rivalPubkey.slice(0, 8)}`,
+          rivalName: resolveRivalName(rivalPubkey, senderProfile, cachedChallenge?.rivalName),
           amountSats: challenge.amountSats,
           expirationAt: new Date(challenge.expiresAt).getTime(),
           createdAt: new Date(challenge.createdAt).getTime(),
@@ -634,7 +676,7 @@ export function ChallengeProvider({ children }: { children: ReactNode }) {
         return;
       }
 
-      // Backend doesn't have the challenge yet, create a local placeholder with the token as proof
+      // If the backend still does not know this challenge, keep a local placeholder so the link remains actionable.
       const localChallenge: CachedChallenge = {
         id: challengeId,
         accessToken: token,
@@ -644,7 +686,7 @@ export function ChallengeProvider({ children }: { children: ReactNode }) {
         mode: 'friendly',
         state: 'received',
         rivalPubkey: ownerHint || '',
-        rivalName: ownerHint ? `Rival ${ownerHint.slice(0, 8)}` : 'Desconocido',
+        rivalName: ownerHint ? resolveRivalName(ownerHint) : 'Desconocido',
         amountSats: 0,
         expirationAt: Date.now() + 24 * 60 * 60 * 1000,
         createdAt: Date.now(),
@@ -656,7 +698,7 @@ export function ChallengeProvider({ children }: { children: ReactNode }) {
       setChallengeError('');
     } catch {
       setLinkedChallenge(null);
-      setChallengeError('No se pudo cargar el desafío desde el servidor.');
+      setChallengeError('No se pudo cargar el desafío desde el servidor. Probá abrir el link desde la misma URL donde está corriendo Futbolcillo.');
     }
   }, [session.pubkey]);
 
@@ -842,36 +884,44 @@ export function ChallengeProvider({ children }: { children: ReactNode }) {
     const cached = await cacheDb.challenges.get(challengeId);
     if (cached) {
       setActiveChallenge(cached);
-      return;
     }
-    // Challenge not in cache yet, try fetching from server
+
     try {
       const res = await fetch(`/api/challenges/status?id=${encodeURIComponent(challengeId)}`);
       const data = await res.json().catch(() => ({}));
       if (res.ok && data.ok && data.challenge) {
-        const ch = data.challenge as { id: string; ownerPubkey: string; rivalPubkey: string; mode: string; state: string; amountSats: number; expiresAt: string; createdAt: string; updatedAt: string };
+        const ch = data.challenge as { id: string; accessToken: string; ownerPubkey: string; rivalPubkey: string; mode: string; state: string; amountSats: number; winnerPubkey?: string | null; scoreHome?: number | null; scoreAway?: number | null; expiresAt: string; createdAt: string; updatedAt: string };
         const isOwner = ch.ownerPubkey === session.pubkey;
         const rivalPubkey = isOwner ? ch.rivalPubkey : ch.ownerPubkey;
+        const rivalProfile = await cacheDb.profiles.get(rivalPubkey);
         const newChallenge: CachedChallenge = {
           id: ch.id,
-          accessToken: '',
+          accessToken: ch.accessToken,
           ownerPubkey: session.pubkey,
           sourceOwnerPubkey: ch.ownerPubkey,
           direction: isOwner ? 'outgoing' : 'incoming',
           mode: ch.mode as ChallengeMode,
           state: ch.state as ChallengeState,
           rivalPubkey,
-          rivalName: `Rival ${rivalPubkey.slice(0, 8)}`,
+          rivalName: resolveRivalName(rivalPubkey, rivalProfile, cached?.rivalName),
           amountSats: ch.amountSats,
           expirationAt: new Date(ch.expiresAt).getTime(),
           createdAt: new Date(ch.createdAt).getTime(),
           updatedAt: new Date(ch.updatedAt).getTime(),
+          winnerPubkey: ch.winnerPubkey || undefined,
+          scoreHome: ch.scoreHome ?? undefined,
+          scoreAway: ch.scoreAway ?? undefined,
         };
         await cacheDb.challenges.put(newChallenge);
         setActiveChallenge(newChallenge);
+        return;
       }
     } catch {
       // ignore
+    }
+
+    if (cached) {
+      setActiveChallenge(cached);
     }
   }, [session.pubkey]);
 
@@ -882,6 +932,43 @@ export function ChallengeProvider({ children }: { children: ReactNode }) {
     });
     await refreshChallenges();
   }, [refreshChallenges]);
+
+  const syncChallengeProgress = useCallback(async (challengeId: string, state: ChallengeState, scoreHome: number, scoreAway: number) => {
+    const updatedAt = Date.now();
+    try {
+      const res = await fetch('/api/challenges/control', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'update_state',
+          challengeId,
+          state,
+          scoreHome,
+          scoreAway,
+        }),
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) {
+        return;
+      }
+
+      await cacheDb.challenges.update(challengeId, {
+        state,
+        scoreHome,
+        scoreAway,
+        updatedAt,
+      });
+      patchLocalChallenge(challengeId, {
+        state,
+        scoreHome,
+        scoreAway,
+        updatedAt,
+      });
+    } catch {
+      // Keep local cache untouched when the server write fails.
+    }
+  }, [patchLocalChallenge]);
 
   const clearActiveChallenge = useCallback(() => {
     setActiveChallenge(null);
@@ -936,6 +1023,7 @@ export function ChallengeProvider({ children }: { children: ReactNode }) {
       finalizeChallenge,
       finalizeChallengeWithResult,
       updateChallengeState,
+      syncChallengeProgress,
       setActiveChallengeById,
       clearActiveChallenge,
       challengeError,
@@ -943,7 +1031,7 @@ export function ChallengeProvider({ children }: { children: ReactNode }) {
       selectedFilter,
       setSelectedFilter,
     }),
-    [filteredChallenges, recentRivals, followingRivals, rivalMatches, rivalProfiles, linkedChallenge, activeChallenge, activeChallengeId, pendingIncomingCount, draft, setDraft, selectRival, createChallenge, refreshChallenges, loadLinkedChallenge, acceptLinkedChallenge, rejectLinkedChallenge, acceptIncomingChallenge, enterAcceptedChallenge, finalizeChallenge, finalizeChallengeWithResult, updateChallengeState, setActiveChallengeById, clearActiveChallenge, challengeError, clearChallengeError, selectedFilter]
+    [filteredChallenges, recentRivals, followingRivals, rivalMatches, rivalProfiles, linkedChallenge, activeChallenge, activeChallengeId, pendingIncomingCount, draft, setDraft, selectRival, createChallenge, refreshChallenges, loadLinkedChallenge, acceptLinkedChallenge, rejectLinkedChallenge, acceptIncomingChallenge, enterAcceptedChallenge, finalizeChallenge, finalizeChallengeWithResult, updateChallengeState, syncChallengeProgress, setActiveChallengeById, clearActiveChallenge, challengeError, clearChallengeError, selectedFilter]
   );
 
   return <ChallengeContext.Provider value={value}>{children}</ChallengeContext.Provider>;

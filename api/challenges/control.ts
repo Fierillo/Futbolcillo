@@ -72,7 +72,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     if (body.action === 'finalize') {
-      if (challenge.state !== 'in_match' && challenge.state !== 'accepted') {
+      if (challenge.state !== 'in_match' && challenge.state !== 'accepted' && challenge.state !== 'finalized') {
         res.status(409).json({ ok: false, error: `Challenge is already ${challenge.state}` });
         return;
       }
@@ -101,11 +101,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return;
       }
 
+      const scoreHome = body.scoreHome ?? null;
+      const scoreAway = body.scoreAway ?? null;
+
       await query`
-        update challenges set state = ${body.state}, updated_at = now() where id = ${body.challengeId}
+        update challenges
+        set state = ${body.state},
+            score_home = ${scoreHome},
+            score_away = ${scoreAway},
+            updated_at = now()
+        where id = ${body.challengeId}
       `;
 
-      res.status(200).json({ ok: true, challengeId: body.challengeId, state: body.state });
+      res.status(200).json({ ok: true, challengeId: body.challengeId, state: body.state, scoreHome, scoreAway });
       return;
     }
 
