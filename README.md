@@ -24,14 +24,17 @@ Futbolcillo is a turn-based football game built with `React + TypeScript + Canva
 - [x] Challenge history with filters
 - [x] Local persistence with Dexie
 - [x] Online match server-authoritative on Vercel + Neon
+- [x] Live multiplayer moved to PartyKit realtime transport
 - [x] Shot submission and validation on server
 - [x] Replay metadata for shot animation
-- [x] Rematch request / accept / reject
+- [x] Rematch request / accept / reject with improved lifecycle
 - [x] Explicit match termination flow
+- [x] Termination notice overlay with auto-dismiss
 - [x] Schema bootstrap and consolidated endpoints (10 functions)
 - [ ] Sound effects and richer match presentation
 - [ ] Nostr resilience across flaky relays
-- [ ] Challenge status UX and cleanup flows
+- [x] Challenge status UX and cleanup flows
+- [x] Session UX and bunker QR connection flow improvements
 - [ ] Sync hardening for long online sessions
 - [ ] Player-facing sync diagnostics
 - [ ] Rate limiting and abuse controls
