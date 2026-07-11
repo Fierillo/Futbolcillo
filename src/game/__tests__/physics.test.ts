@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createInitialMatchState, simulateShot } from '../physics';
+import { createInitialMatchState, simulateShot, simulateShotWithFrames } from '../physics';
 
 describe('createInitialMatchState', () => {
   it('creates state with correct teams and initial positions', () => {
@@ -83,8 +83,10 @@ describe('simulateShot', () => {
     rival.pos.y = 300;
     state.ball.pos.x = 500;
     state.ball.pos.y = 300;
-    const result = simulateShot(state, shooterIdx, -18, 0);
-    expect(result.activeShotCommittedFoul || result.bonusTurnTeam === 'away').toBe(true);
+    const { finalState, shotAnimation } = simulateShotWithFrames(state, shooterIdx, -18, 0);
+    expect(shotAnimation.outcome.foul).toEqual({ byTeam: 'home', victimTeam: 'away' });
+    expect(finalState.activeShotCommittedFoul).toBe(false);
+    expect(finalState.bonusTurnTeam).toBe('away');
   });
 
   it('preserves original state (immutability)', () => {

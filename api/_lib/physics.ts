@@ -1,1 +1,1 @@
-export * from '../../shared/match-physics.ts';
+export * from '../../shared/core-match-engine.ts';

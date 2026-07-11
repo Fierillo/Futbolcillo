@@ -1,3 +1,5 @@
+import type { ShotAnimation } from '../../shared/core-match-engine.ts';
+
 export interface Vec2 {
   x: number;
   y: number;
@@ -48,15 +50,7 @@ export interface GameState {
   dragCurrent: Vec2 | null;
   winner: 'home' | 'away' | null;
   lastShot: { id: string; playerIndex: number; velX: number; velY: number } | null;
-  lastShotAnimation: {
-    id: string;
-    initialState: unknown;
-    finalState?: unknown;
-    frames?: { players: Vec2[]; ball: Vec2 }[];
-    playerIndex: number;
-    velX: number;
-    velY: number;
-  } | null;
+  lastShotAnimation: ShotAnimation | null;
   message: string;
   messageTimer: number;
   particles: Particle[];
@@ -72,14 +66,16 @@ export interface Particle {
   size: number;
 }
 
-export const FIELD_WIDTH = 1000;
-export const FIELD_HEIGHT = 600;
-export const PLAYER_RADIUS = 22;
-export const BALL_RADIUS = 14;
-export const GOAL_WIDTH = 20;
-export const GOAL_HEIGHT = 160;
-export const FRICTION = 0.985;
-export const STOP_THRESHOLD = 0.08;
-export const MAX_SHOOT_POWER = 18;
-export const MOVEMENT_SCALE = 0.5;
-export const WIN_SCORE = 3;
+export {
+  FIELD_WIDTH,
+  FIELD_HEIGHT,
+  PLAYER_RADIUS,
+  BALL_RADIUS,
+  GOAL_WIDTH,
+  GOAL_HEIGHT,
+  FRICTION,
+  STOP_THRESHOLD,
+  MAX_SHOOT_POWER,
+  MOVEMENT_SCALE,
+  WIN_SCORE,
+} from '../../shared/core-match-engine.ts';
