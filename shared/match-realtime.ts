@@ -1,4 +1,4 @@
-import type { MatchState, ShotAnimation } from './match-physics.ts';
+import type { MatchState, ShotAnimation } from './core-match-engine.ts';
 
 export type MatchStatus = 'active' | 'finished' | 'terminated';
 
@@ -15,6 +15,7 @@ export interface ActiveMatchSnapshot {
   rematchRequestedBy?: string | null;
   rematchMatchId?: string | null;
   nextChallengeId?: string | null;
+  nextChallengeAccessToken?: string | null;
   rematchRejectedBy?: string | null;
   terminatedBy?: string | null;
   updatedAt: string;

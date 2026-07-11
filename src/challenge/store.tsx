@@ -40,7 +40,7 @@ interface ChallengeContextValue {
   finalizeChallengeWithResult: (challengeId: string, winnerPubkey: string | null, scoreHome: number, scoreAway: number) => Promise<void>;
   updateChallengeState: (challengeId: string, state: ChallengeState) => Promise<void>;
   syncChallengeProgress: (challengeId: string, state: ChallengeState, scoreHome: number, scoreAway: number) => Promise<void>;
-  setActiveChallengeById: (challengeId: string) => Promise<void>;
+  setActiveChallengeById: (challengeId: string, accessToken?: string) => Promise<void>;
   challengeError: string;
   clearChallengeError: () => void;
   selectedFilter: ChallengeFilter;
@@ -119,8 +119,10 @@ async function sendChallengeDirectMessage(
   ndk: NDK,
   ownerPubkey: string,
   challenge: CachedChallenge,
-  rivalName: string
+  senderName: string
 ) {
+  await ndk.connect(1500);
+
   const recipient = ndk.getUser({ pubkey: challenge.rivalPubkey });
   const challengeUrl = buildChallengeUrl(challenge.id, challenge.accessToken, ownerPubkey);
   const message =
@@ -149,7 +151,7 @@ async function sendChallengeDirectMessage(
     from: ownerPubkey,
     to: challenge.rivalPubkey,
     message,
-    rivalName,
+    senderName,
   };
 
   const event = new NDKEvent(ndk, {
@@ -329,11 +331,6 @@ export function ChallengeProvider({ children }: { children: ReactNode }) {
             }
           }
 
-          const cachedIds = await cacheDb.challenges.where('ownerPubkey').equals(session.pubkey).primaryKeys();
-          const staleIds = cachedIds.filter((id) => !serverChallengeIds.has(String(id))).map((id) => String(id));
-          if (staleIds.length > 0) {
-            await cacheDb.challenges.bulkDelete(staleIds);
-          }
         }
       }
     } catch {
@@ -439,7 +436,7 @@ export function ChallengeProvider({ children }: { children: ReactNode }) {
           expirationAt: number;
           createdAt: number;
           from: string;
-          rivalName?: string;
+          senderName?: string;
         };
 
         if (payload.type === 'futbolcillo_challenge') {
@@ -449,7 +446,7 @@ export function ChallengeProvider({ children }: { children: ReactNode }) {
             await cacheDb.profiles.put({
               pubkey: senderPubkey,
               avatarUrl: `https://api.dicebear.com/9.x/shapes/svg?seed=${senderPubkey}`,
-              displayName: resolveRivalName(senderPubkey, null, payload.rivalName),
+              displayName: resolveRivalName(senderPubkey, null, payload.senderName),
               nip05: '',
               lud16: '',
               updatedAt: Date.now(),
@@ -465,7 +462,7 @@ export function ChallengeProvider({ children }: { children: ReactNode }) {
             mode: payload.mode,
             state: 'received',
             rivalPubkey: senderPubkey,
-            rivalName: resolveRivalName(senderPubkey, existingProfile, payload.rivalName),
+            rivalName: resolveRivalName(senderPubkey, existingProfile, payload.senderName),
             amountSats: payload.amountSats,
             expirationAt: payload.expirationAt,
             createdAt: payload.createdAt,
@@ -574,22 +571,35 @@ export function ChallengeProvider({ children }: { children: ReactNode }) {
         updatedAt: now,
       };
 
-      await sendChallengeDirectMessage(getNostrClient(), session.pubkey, challenge, challenge.rivalName);
+      await sendChallengeDirectMessage(
+        getNostrClient(),
+        session.pubkey,
+        challenge,
+        session.profile?.name || session.profile?.pubkey?.slice(0, 8) || 'Jugador'
+      );
       await cacheDb.challenges.put(challenge);
 
-      await fetch('/api/challenges/create', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          id: challenge.id,
-          accessToken: challenge.accessToken,
-          ownerPubkey: challenge.ownerPubkey,
-          rivalPubkey: challenge.rivalPubkey,
-          mode: challenge.mode,
-          amountSats: challenge.amountSats,
-          expiresAt: new Date(challenge.expirationAt).toISOString(),
-        }),
-      }).catch(() => {});
+      try {
+        const res = await fetch('/api/challenges/create', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            id: challenge.id,
+            accessToken: challenge.accessToken,
+            ownerPubkey: challenge.ownerPubkey,
+            rivalPubkey: challenge.rivalPubkey,
+            mode: challenge.mode,
+            amountSats: challenge.amountSats,
+            expiresAt: new Date(challenge.expirationAt).toISOString(),
+          }),
+        });
+
+        if (!res.ok) {
+          console.warn('[challenge] backend-create-failed', res.status);
+        }
+      } catch (error) {
+        console.warn('[challenge] backend-create-unavailable', error);
+      }
 
       const existingProfile = await cacheDb.profiles.get(rivalPubkey);
       if (!existingProfile) {
@@ -880,14 +890,19 @@ export function ChallengeProvider({ children }: { children: ReactNode }) {
     await refreshChallenges();
   }, [refreshChallenges]);
 
-  const setActiveChallengeById = useCallback(async (challengeId: string) => {
+  const setActiveChallengeById = useCallback(async (challengeId: string, accessToken = '') => {
     const cached = await cacheDb.challenges.get(challengeId);
     if (cached) {
       setActiveChallenge(cached);
     }
 
     try {
-      const res = await fetch(`/api/challenges/status?id=${encodeURIComponent(challengeId)}`);
+      const searchParams = new URLSearchParams({ id: challengeId });
+      if (accessToken) {
+        searchParams.set('token', accessToken);
+      }
+
+      const res = await fetch(`/api/challenges/status?${searchParams.toString()}`);
       const data = await res.json().catch(() => ({}));
       if (res.ok && data.ok && data.challenge) {
         const ch = data.challenge as { id: string; accessToken: string; ownerPubkey: string; rivalPubkey: string; mode: string; state: string; amountSats: number; winnerPubkey?: string | null; scoreHome?: number | null; scoreAway?: number | null; expiresAt: string; createdAt: string; updatedAt: string };

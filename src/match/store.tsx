@@ -20,6 +20,7 @@ interface MatchContextValue {
   pendingShotAnimation: ShotAnimation | null;
   isSubmittingRematch: boolean;
   rematchChallengeId: string | null;
+  rematchChallengeAccessToken: string | null;
   interactionResetNonce: number;
   createMatch: (challenge: CachedChallenge) => Promise<void>;
   submitShot: (playerTeam: 'home' | 'away', playerNumber: number, velX: number, velY: number) => Promise<void>;
@@ -48,6 +49,7 @@ export function MatchProvider({ children }: { children: ReactNode }) {
   const [pendingShotAnimation, setPendingShotAnimation] = useState<ShotAnimation | null>(null);
   const [isSubmittingRematch, setIsSubmittingRematch] = useState(false);
   const [rematchChallengeId, setRematchChallengeId] = useState<string | null>(null);
+  const [rematchChallengeAccessToken, setRematchChallengeAccessToken] = useState<string | null>(null);
   const [interactionResetNonce, setInteractionResetNonce] = useState(0);
   const socketRef = useRef<PartySocket | null>(null);
   const activeMatchIdRef = useRef<string | null>(null);
@@ -106,6 +108,7 @@ export function MatchProvider({ children }: { children: ReactNode }) {
     setPendingShotAnimation(null);
     setIsSubmittingRematch(false);
     setRematchChallengeId(null);
+    setRematchChallengeAccessToken(null);
     lastSeenShotIdRef.current = null;
     creatingForChallengeRef.current = null;
   }, [closeSocket]);
@@ -127,6 +130,7 @@ export function MatchProvider({ children }: { children: ReactNode }) {
 
     if (nextMatch.rematchMatchId && nextMatch.nextChallengeId) {
       setRematchChallengeId(nextMatch.nextChallengeId);
+      setRematchChallengeAccessToken(nextMatch.nextChallengeAccessToken || null);
     }
 
     const anim = animation;
@@ -264,6 +268,7 @@ export function MatchProvider({ children }: { children: ReactNode }) {
 
   const clearRematchChallengeId = useCallback(() => {
     setRematchChallengeId(null);
+    setRematchChallengeAccessToken(null);
   }, []);
 
   const createMatch = useCallback(async (challenge: CachedChallenge) => {
@@ -280,20 +285,25 @@ export function MatchProvider({ children }: { children: ReactNode }) {
     setMatchError('');
 
     try {
-      const res = await fetch('/api/matches/create', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          challengeId: challenge.id,
-          accessToken: challenge.accessToken,
-          homePubkey: challenge.direction === 'outgoing' ? challenge.ownerPubkey : challenge.rivalPubkey,
-          awayPubkey: challenge.direction === 'outgoing' ? challenge.rivalPubkey : challenge.ownerPubkey,
-          homeName: challenge.direction === 'outgoing' ? (session.profile?.name || 'Local') : challenge.rivalName,
-          awayName: challenge.direction === 'outgoing' ? challenge.rivalName : (session.profile?.name || 'Local'),
-          mode: challenge.mode,
-          amountSats: challenge.amountSats,
-        }),
-      });
+      const creatorPubkey = challenge.sourceOwnerPubkey || challenge.ownerPubkey;
+      const creatorName = challenge.direction === 'outgoing' ? (session.profile?.name || 'Local') : challenge.rivalName;
+      const joinerPubkey = challenge.direction === 'outgoing' ? challenge.rivalPubkey : localPubkey;
+      const joinerName = challenge.direction === 'outgoing' ? challenge.rivalName : (session.profile?.name || 'Local');
+
+        const res = await fetch('/api/matches/create', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            challengeId: challenge.id,
+            accessToken: challenge.accessToken,
+            homePubkey: creatorPubkey,
+            awayPubkey: joinerPubkey,
+            homeName: creatorName,
+            awayName: joinerName,
+            mode: challenge.mode,
+            amountSats: challenge.amountSats,
+          }),
+        });
 
       const data = await res.json() as { ok: boolean; matchId?: string; error?: string };
       if (!res.ok || !data.ok || !data.matchId) {
@@ -378,6 +388,7 @@ export function MatchProvider({ children }: { children: ReactNode }) {
     pendingShotAnimation,
     isSubmittingRematch,
     rematchChallengeId,
+    rematchChallengeAccessToken,
     createMatch,
     submitShot,
     requestRematch,

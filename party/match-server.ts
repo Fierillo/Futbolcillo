@@ -1,5 +1,5 @@
 import type * as Party from 'partykit/server';
-import { createInitialMatchState, simulateShotWithFrames, type MatchState } from '../shared/match-physics.ts';
+import { createInitialMatchState, simulateShotWithFrames, type MatchState } from '../shared/core-match-engine.ts';
 import type { ActiveMatchSnapshot, MatchClientEvent, MatchServerEvent, MatchStatus } from '../shared/match-realtime.ts';
 import { getSql } from './neon.ts';
 
@@ -19,7 +19,7 @@ type MatchRow = {
   updated_at: string;
 };
 
-type PersistedSnapshot = Omit<ActiveMatchSnapshot, 'latestShotAnimation' | 'nextChallengeId'>;
+type PersistedSnapshot = Omit<ActiveMatchSnapshot, 'latestShotAnimation' | 'nextChallengeId' | 'nextChallengeAccessToken'>;
 
 function parseEvent(message: string | ArrayBuffer): MatchClientEvent | null {
   if (typeof message !== 'string') return null;
@@ -44,7 +44,12 @@ function isPlayer(snapshot: ActiveMatchSnapshot, pubkey: string) {
 }
 
 function toPersistedSnapshot(snapshot: ActiveMatchSnapshot): PersistedSnapshot {
-  const { latestShotAnimation: _latestShotAnimation, nextChallengeId: _nextChallengeId, ...persisted } = snapshot;
+  const {
+    latestShotAnimation: _latestShotAnimation,
+    nextChallengeId: _nextChallengeId,
+    nextChallengeAccessToken: _nextChallengeAccessToken,
+    ...persisted
+  } = snapshot;
   return persisted;
 }
 
@@ -201,6 +206,7 @@ export default class MatchServer implements Party.Server {
       rematchRequestedBy: match.rematch_requested_by,
       rematchMatchId: match.rematch_match_id,
       nextChallengeId: null,
+      nextChallengeAccessToken: null,
       rematchRejectedBy: match.rematch_rejected_by,
       terminatedBy: match.terminated_by,
       updatedAt: match.updated_at,
@@ -452,6 +458,7 @@ export default class MatchServer implements Party.Server {
 
       this.snapshot.rematchMatchId = rematchId;
       this.snapshot.nextChallengeId = rematchChallengeId;
+      this.snapshot.nextChallengeAccessToken = rematchAccessToken;
       this.snapshot.rematchRejectedBy = null;
     }
 
@@ -466,6 +473,7 @@ export default class MatchServer implements Party.Server {
 
     if (this.snapshot) {
       this.snapshot.nextChallengeId = null;
+      this.snapshot.nextChallengeAccessToken = null;
     }
   }
 
