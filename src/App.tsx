@@ -477,7 +477,9 @@ export default function App() {
           if (goalScored) {
             const goalScorer = finalState.score.home !== anim.initialState.score.home ? 'home' : 'away';
             const scorerName = goalScorer === 'home' ? animationHomeAlias : animationAwayAlias;
-            next.message = `¡GOL DE ${scorerName.toUpperCase()}!`;
+            next.message = isTrainingMode && goalScorer === 'away'
+              ? 'GOL DE LA MAQUINA'
+              : `¡GOL DE ${scorerName.toUpperCase()}!`;
             next.messageTimer = 120;
             next.cameraShake = 12;
             spawnParticles(next, next.ball.pos, 50, '#fbbf24', 8, 5);
@@ -491,7 +493,9 @@ export default function App() {
             spawnParticles(next, shooterPos, 18, '#f87171', 3, 3);
           } else if (!anim.initialState.winner && finalState.winner) {
             const winnerName = finalState.winner === 'home' ? animationHomeAlias : animationAwayAlias;
-            next.message = `¡${winnerName.toUpperCase()} CAMPEÓN!`;
+            next.message = isTrainingMode && finalState.winner === 'away'
+              ? 'MAQUINA CAMPEON'
+              : `¡${winnerName.toUpperCase()} CAMPEÓN!`;
             next.messageTimer = 120;
             next.cameraShake = 12;
           }
@@ -768,7 +772,13 @@ export default function App() {
         avatarUrl: 'https://api.dicebear.com/9.x/bottts/svg?seed=training-bot',
       };
 
-  const winnerName = gameState.winner === 'home' ? homeAlias : awayAlias;
+  const winnerName = isTrainingMode
+    ? gameState.winner === 'home'
+      ? 'Local'
+      : 'Maquina'
+    : gameState.winner === 'home'
+      ? homeAlias
+      : awayAlias;
   const displayedScore = activeMatchId && matchState ? matchState.score : gameState.score;
   const localWon = Boolean(activeChallenge && localTeam && gameState.winner && localTeam === gameState.winner);
   const rematchRequestedBy = activeMatchMeta?.rematchRequestedBy || null;
