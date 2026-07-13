@@ -70,6 +70,22 @@ describe('simulateShot', () => {
     expect(result.score.away).toBe(0);
   });
 
+  it('resets to default positions and gives the restart turn to the other team after a goal', () => {
+    const state = createInitialMatchState('a', 'b');
+    state.ball.pos.x = 10;
+    state.ball.pos.y = 300;
+    const homePlayer = state.players.find((p) => p.team === 'home')!;
+    const homePlayerIndex = state.players.indexOf(homePlayer);
+
+    const result = simulateShot(state, homePlayerIndex, 0, 0);
+    const awayCentralPlayer = result.players.find((p) => p.team === 'away' && p.number === 3);
+
+    expect(result.score.home).toBe(1);
+    expect(result.turn).toBe('away');
+    expect(result.ball.pos).toEqual({ x: 500, y: 300 });
+    expect(awayCentralPlayer?.pos).toEqual({ x: 320, y: 300 });
+  });
+
   it('detects foul when shooter hits rival before ball', () => {
     const state = createInitialMatchState('a', 'b');
 

@@ -5,6 +5,7 @@ import TejoCanvas from './game/TejoCanvas';
 import { preparePhaseOneInfrastructure, usePhaseOneBoot } from './app/use-phase-one-boot';
 import { simulateShotWithFrames, type ShotAnimation } from './game/physics';
 import { GameState, FIELD_WIDTH, FIELD_HEIGHT } from './game/types';
+import { chooseTrainingAiShot } from './game/training-ai';
 import {
   advanceVisualEffects,
   clearPointerSelection,
@@ -43,6 +44,7 @@ export default function App() {
   const animFrameRef = useRef<number>(0);
   const containerRef = useRef<HTMLDivElement>(null);
   const lastHandledTerminationRef = useRef<string | null>(null);
+  const trainingAiTurnKeyRef = useRef<string | null>(null);
   const { setSyncState } = useSyncStatus();
   const { session, refreshProfile } = useNostrSession();
   const { activeChallenge, pendingIncomingCount, clearActiveChallenge, finalizeChallengeWithResult, syncChallengeProgress, setActiveChallengeById } = useChallengeStore();
@@ -51,6 +53,22 @@ export default function App() {
   const isResumingMatch = activeChallenge?.state === 'in_match';
   const activeShotAnimation = pendingShotAnimation ?? localShotAnimation;
   const isShotAnimating = isAnimatingShot || Boolean(localShotAnimation);
+  const isTrainingMode = !activeMatchId && !activeChallenge;
+  const trainingAiTurnKey = isTrainingMode
+    && !isShotAnimating
+    && !gameState.winner
+    && gameState.phase === 'aiming'
+    && gameState.turn === 'away'
+    ? [
+        gameState.turn,
+        gameState.phase,
+        gameState.score.home,
+        gameState.score.away,
+        Math.round(gameState.ball.pos.x),
+        Math.round(gameState.ball.pos.y),
+        gameState.lastShot?.id || 'no-shot',
+      ].join(':')
+    : null;
 
   const creatorPubkey = activeMatchMeta?.homePubkey
     || (activeChallenge
@@ -383,9 +401,9 @@ export default function App() {
 
     const anim = activeShotAnimation;
     const animationHomeAlias = activeMatchMeta?.homeName
-      || joinerAlias;
-    const animationAwayAlias = activeMatchMeta?.awayName
       || creatorAlias;
+    const animationAwayAlias = activeMatchMeta?.awayName
+      || joinerAlias;
 
     if (!anim.initialState || !anim.finalState || !Array.isArray(anim.frames) || anim.frames.length === 0) {
       console.error('[online-shot][app] invalid-animation-payload', anim);
@@ -415,23 +433,25 @@ export default function App() {
       const frameIndex = Math.min(visibleFrameCount - 1, Math.floor(progress * Math.max(visibleFrameCount - 1, 0)));
       const frame = anim.frames[frameIndex];
       const finalState = anim.finalState;
-      const framePlayers = Array.isArray(frame?.players) ? frame.players : [];
-      const frameBall = frame?.ball ?? anim.initialState.ball.pos;
+      const settledPlayers = progress < 1
+        ? (Array.isArray(frame?.players) ? frame.players : [])
+        : finalState.players.map((player) => player.pos);
+      const settledBall = progress < 1 ? (frame?.ball ?? anim.initialState.ball.pos) : finalState.ball.pos;
 
       setGameState((prev) => {
         const next = { ...prev };
         next.players = createVisualPlayers(anim.initialState.players).map((player, index) => ({
           ...player,
           pos: {
-            x: framePlayers[index]?.x ?? player.pos.x,
-            y: framePlayers[index]?.y ?? player.pos.y,
+            x: settledPlayers[index]?.x ?? player.pos.x,
+            y: settledPlayers[index]?.y ?? player.pos.y,
           },
         }));
         next.ball = {
           ...createVisualBall(anim.initialState.ball),
           pos: {
-            x: frameBall.x,
-            y: frameBall.y,
+            x: settledBall.x,
+            y: settledBall.y,
           },
           trail: progress < 1 ? [] : [...finalState.ball.trail],
         };
@@ -496,11 +516,45 @@ export default function App() {
     return () => cancelAnimationFrame(animFrameRef.current);
   }, [activeChallenge, activeMatchMeta, activeShotAnimation, finishActiveShotAnimation, session.profile?.name]);
 
+  useEffect(() => {
+    if (!trainingAiTurnKey) {
+      trainingAiTurnKeyRef.current = null;
+      return;
+    }
+
+    if (trainingAiTurnKeyRef.current === trainingAiTurnKey) {
+      return;
+    }
+
+    trainingAiTurnKeyRef.current = trainingAiTurnKey;
+    const timeoutId = window.setTimeout(() => {
+      const currentState = gameStateRef.current;
+      const shot = chooseTrainingAiShot(toMatchState(currentState), 'away');
+      if (!shot) {
+        trainingAiTurnKeyRef.current = null;
+        return;
+      }
+
+      const { shotAnimation } = simulateShotWithFrames(
+        toMatchState(currentState),
+        shot.playerIndex,
+        shot.velX,
+        shot.velY,
+        `training-ai-shot-${Date.now()}`,
+      );
+      setLocalShotAnimation(shotAnimation);
+    }, 450);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [trainingAiTurnKey]);
+
   const onMouseDown = useCallback((x: number, y: number) => {
     if (isSubmittingShot || isShotAnimating) return;
     if (activeMatchId && matchState) {
       if (matchState.turn !== localTeam || matchState.phase !== 'aiming') return;
     } else if (activeChallenge && gameStateRef.current.turn !== localTeam) {
+      return;
+    } else if (!activeChallenge && !activeMatchId && gameStateRef.current.turn !== 'home') {
       return;
     }
 
@@ -519,6 +573,8 @@ export default function App() {
     if (activeMatchId && matchState) {
       if (matchState.turn !== localTeam || matchState.phase !== 'aiming') return;
     } else if (activeChallenge && gameStateRef.current.turn !== localTeam) {
+      return;
+    } else if (!activeChallenge && !activeMatchId && gameStateRef.current.turn !== 'home') {
       return;
     }
 
@@ -548,6 +604,8 @@ export default function App() {
     if (activeMatchId && matchState) {
       if (matchState.turn !== localTeam || matchState.phase !== 'aiming') return;
     } else if (activeChallenge && gameStateRef.current.turn !== localTeam) {
+      return;
+    } else if (!activeChallenge && !activeMatchId && gameStateRef.current.turn !== 'home') {
       return;
     }
 
