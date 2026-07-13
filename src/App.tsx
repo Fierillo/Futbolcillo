@@ -400,10 +400,12 @@ export default function App() {
     if (!activeShotAnimation) return;
 
     const anim = activeShotAnimation;
-    const animationHomeAlias = activeMatchMeta?.homeName
-      || creatorAlias;
-    const animationAwayAlias = activeMatchMeta?.awayName
-      || joinerAlias;
+    const animationHomeAlias = isTrainingMode
+      ? 'Local'
+      : activeMatchMeta?.homeName || creatorAlias;
+    const animationAwayAlias = isTrainingMode
+      ? 'Máquina'
+      : activeMatchMeta?.awayName || joinerAlias;
 
     if (!anim.initialState || !anim.finalState || !Array.isArray(anim.frames) || anim.frames.length === 0) {
       console.error('[online-shot][app] invalid-animation-payload', anim);
@@ -514,7 +516,7 @@ export default function App() {
 
     animFrameRef.current = requestAnimationFrame(renderFrame);
     return () => cancelAnimationFrame(animFrameRef.current);
-  }, [activeChallenge, activeMatchMeta, activeShotAnimation, finishActiveShotAnimation, session.profile?.name]);
+  }, [activeChallenge, activeMatchMeta, activeShotAnimation, creatorAlias, finishActiveShotAnimation, isTrainingMode, joinerAlias, session.profile?.name]);
 
   useEffect(() => {
     if (!trainingAiTurnKey) {
