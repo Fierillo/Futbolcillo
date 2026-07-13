@@ -48,6 +48,7 @@ export function createVisualBall(ball: PhysicsBall): GameState['ball'] {
 
 export function createInitialState(): GameState {
   const matchState = createInitialMatchState('training-home', 'training-away');
+  matchState.turn = 'away';
   return {
     players: createVisualPlayers(matchState.players),
     ball: createVisualBall(matchState.ball),

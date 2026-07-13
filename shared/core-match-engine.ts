@@ -280,11 +280,13 @@ function checkGoal(state: MatchState): 'home' | 'away' | null {
 
   const ball = state.ball;
   for (const goal of state.goals) {
-    const inGoalY = ball.pos.y > goal.y && ball.pos.y < goal.y + goal.height;
+    const inGoalY = ball.pos.y + ball.radius > goal.y && ball.pos.y - ball.radius < goal.y + goal.height;
     if (!inGoalY) continue;
 
-    const inGoalX = ball.pos.x >= goal.x && ball.pos.x <= goal.x + goal.width;
-    if (!inGoalX) continue;
+    const touchedBackWall = goal.x <= 0
+      ? ball.pos.x - ball.radius <= goal.x
+      : ball.pos.x + ball.radius >= goal.x + goal.width;
+    if (!touchedBackWall) continue;
 
     if (goal.team === 'home') {
       return 'away';
@@ -294,6 +296,149 @@ function checkGoal(state: MatchState): 'home' | 'away' | null {
   }
 
   return null;
+}
+
+export function recoverInvalidBallState(state: MatchState) {
+  const movingPlayers = state.players.some((player) => Math.abs(player.vel.x) > STOP_THRESHOLD || Math.abs(player.vel.y) > STOP_THRESHOLD);
+  const movingBall = Math.abs(state.ball.vel.x) > STOP_THRESHOLD || Math.abs(state.ball.vel.y) > STOP_THRESHOLD;
+  const ballOutOfBounds = state.ball.pos.x < state.ball.radius
+    || state.ball.pos.x > FIELD_WIDTH - state.ball.radius
+    || state.ball.pos.y < state.ball.radius
+    || state.ball.pos.y > FIELD_HEIGHT - state.ball.radius;
+
+  if (state.phase !== 'aiming' || movingPlayers || movingBall || !ballOutOfBounds) {
+    return false;
+  }
+
+  state.ball.pos = { x: FIELD_WIDTH / 2, y: FIELD_HEIGHT / 2 };
+  state.ball.vel = { x: 0, y: 0 };
+  state.ball.trail = [];
+  return true;
+}
+
+export function swapMatchSides(state: MatchState): MatchState {
+  return {
+    ...state,
+    players: state.players.map((player) => ({
+      ...player,
+      pos: {
+        x: FIELD_WIDTH - player.pos.x,
+        y: player.pos.y,
+      },
+      vel: {
+        x: -player.vel.x,
+        y: player.vel.y,
+      },
+      team: player.team === 'home' ? 'away' : 'home',
+    })),
+    ball: {
+      ...state.ball,
+      pos: {
+        x: FIELD_WIDTH - state.ball.pos.x,
+        y: state.ball.pos.y,
+      },
+      vel: {
+        x: -state.ball.vel.x,
+        y: state.ball.vel.y,
+      },
+      trail: state.ball.trail.map((point) => ({
+        x: FIELD_WIDTH - point.x,
+        y: point.y,
+      })),
+    },
+    goals: state.goals.map((goal) => ({
+      ...goal,
+      x: FIELD_WIDTH - goal.x - goal.width,
+      team: goal.team === 'home' ? 'away' : 'home',
+    })),
+    score: {
+      home: state.score.away,
+      away: state.score.home,
+    },
+    turn: state.turn === 'home' ? 'away' : 'home',
+    bonusTurnTeam: state.bonusTurnTeam == null ? null : state.bonusTurnTeam === 'home' ? 'away' : 'home',
+    winner: state.winner == null ? null : state.winner === 'home' ? 'away' : 'home',
+    lastShot: state.lastShot
+      ? {
+          ...state.lastShot,
+          velX: -state.lastShot.velX,
+        }
+      : null,
+  };
+}
+
+export function mirrorMatchHorizontally(state: MatchState): MatchState {
+  return {
+    ...state,
+    players: state.players.map((player) => ({
+      ...player,
+      pos: {
+        x: FIELD_WIDTH - player.pos.x,
+        y: player.pos.y,
+      },
+      vel: {
+        x: -player.vel.x,
+        y: player.vel.y,
+      },
+    })),
+    ball: {
+      ...state.ball,
+      pos: {
+        x: FIELD_WIDTH - state.ball.pos.x,
+        y: state.ball.pos.y,
+      },
+      vel: {
+        x: -state.ball.vel.x,
+        y: state.ball.vel.y,
+      },
+      trail: state.ball.trail.map((point) => ({
+        x: FIELD_WIDTH - point.x,
+        y: point.y,
+      })),
+    },
+    goals: state.goals.map((goal) => ({
+      ...goal,
+      x: FIELD_WIDTH - goal.x - goal.width,
+    })),
+    lastShot: state.lastShot
+      ? {
+          ...state.lastShot,
+          velX: -state.lastShot.velX,
+        }
+      : null,
+  };
+}
+
+export function normalizeAwayTeamOnLeft(state: MatchState): MatchState {
+  const awayPlayers = state.players.filter((player) => player.team === 'away');
+  const homePlayers = state.players.filter((player) => player.team === 'home');
+  if (awayPlayers.length === 0 || homePlayers.length === 0) {
+    return state;
+  }
+
+  const awayAverageX = awayPlayers.reduce((sum, player) => sum + player.pos.x, 0) / awayPlayers.length;
+  const homeAverageX = homePlayers.reduce((sum, player) => sum + player.pos.x, 0) / homePlayers.length;
+
+  return awayAverageX <= homeAverageX ? state : mirrorMatchHorizontally(state);
+}
+
+export function normalizeGoalTeams(state: MatchState): MatchState {
+  if (state.goals.length !== 2) {
+    return state;
+  }
+
+  const [leftGoal, rightGoal] = [...state.goals].sort((a, b) => a.x - b.x);
+  if (leftGoal.team === 'away' && rightGoal.team === 'home') {
+    return state;
+  }
+
+  return {
+    ...state,
+    goals: state.goals.map((goal) => ({
+      ...goal,
+      team: goal.x === leftGoal.x ? 'away' : 'home',
+    })),
+  };
 }
 
 function resetPositions(state: MatchState) {
@@ -479,7 +624,8 @@ function simulateStepWithOutcome(state: MatchState, outcome: ShotOutcome): boole
     state.ball.vel.y *= -0.9;
   }
 
-  const ballInGoalLane = state.goals.some((goal) => state.ball.pos.y > goal.y && state.ball.pos.y < goal.y + goal.height);
+  const ballInGoalLane = !state.activeShotCommittedFoul
+    && state.goals.some((goal) => state.ball.pos.y > goal.y && state.ball.pos.y < goal.y + goal.height);
   if (!ballInGoalLane) {
     if (state.ball.pos.x - state.ball.radius < 0) {
       state.ball.pos.x = state.ball.radius;
@@ -547,5 +693,6 @@ function simulateStepWithOutcome(state: MatchState, outcome: ShotOutcome): boole
 }
 
 export function simulateStep(state: MatchState): boolean {
+  recoverInvalidBallState(state);
   return simulateStepWithOutcome(state, { foul: null });
 }

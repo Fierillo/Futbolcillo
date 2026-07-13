@@ -159,15 +159,15 @@ export function ChallengeHistoryPanel({ onAction }: Props) {
             const isActive = challenge.id === activeChallengeId;
             const isOutgoing = challenge.direction === 'outgoing';
             const localAlias = session.profile?.name || 'Local';
-            const awayAlias = isOutgoing ? rivalName || 'Rival' : localAlias;
             const homeAlias = isOutgoing ? localAlias : rivalName || 'Rival';
-            const awayAvatar = isOutgoing ? rivalAvatar : localAvatar;
+            const awayAlias = isOutgoing ? rivalName || 'Rival' : localAlias;
             const homeAvatar = isOutgoing ? localAvatar : rivalAvatar;
+            const awayAvatar = isOutgoing ? rivalAvatar : localAvatar;
             const liveScore = isActive && matchState
-              ? `${awayAlias} ${matchState.score.away} - ${matchState.score.home} ${homeAlias}`
+              ? `${homeAlias} ${matchState.score.home} - ${matchState.score.away} ${awayAlias}`
               : null;
             const persistedScore = challenge.scoreHome != null && challenge.scoreAway != null
-              ? `${awayAlias} ${challenge.scoreAway} - ${challenge.scoreHome} ${homeAlias}`
+              ? `${homeAlias} ${challenge.scoreHome} - ${challenge.scoreAway} ${awayAlias}`
               : null;
             const scoreLabel = liveScore || persistedScore;
             const showExpiryLabel = challenge.state === 'sent' || challenge.state === 'received' || challenge.state === 'accepted';
@@ -229,13 +229,13 @@ export function ChallengeHistoryPanel({ onAction }: Props) {
                   </div>
                   <div className="grid w-full grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-3">
                     <div className="flex min-w-0 items-center justify-end">
-                      <img src={awayAvatar} alt={awayAlias} className="h-9 w-9 rounded-full border border-stone-700 object-cover" />
+                      <img src={homeAvatar} alt={homeAlias} className="h-9 w-9 rounded-full border border-stone-700 object-cover" />
                     </div>
                     <div className="rounded-xl bg-stone-950/80 px-3 py-2 text-lg font-black tracking-wide text-amber-300 sm:text-2xl">
                       {scoreLabel || 'vs'}
                     </div>
                     <div className="flex min-w-0 items-center">
-                      <img src={homeAvatar} alt={homeAlias} className="h-9 w-9 rounded-full border border-stone-700 object-cover" />
+                      <img src={awayAvatar} alt={awayAlias} className="h-9 w-9 rounded-full border border-stone-700 object-cover" />
                     </div>
                   </div>
                   <div className="flex w-full flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">

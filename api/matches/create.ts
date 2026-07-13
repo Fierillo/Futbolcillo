@@ -47,6 +47,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       await query`
         insert into challenges (id, access_token, owner_pubkey, rival_pubkey, mode, state, amount_sats, expires_at)
         values (${body.challengeId}, ${body.accessToken}, ${body.homePubkey}, ${body.awayPubkey}, ${body.mode}, 'accepted', ${body.amountSats || 0}, (now() + interval '24 hours'))
+        on conflict (id) do nothing
       `;
       challengeRows = await query<{
         id: string;
@@ -102,13 +103,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     await query`
       insert into matches (id, challenge_id, mode, status, home_pubkey, away_pubkey, home_name, away_name, current_state)
       values (${matchId}, ${body.challengeId}, ${body.mode}, 'active', ${body.homePubkey}, ${body.awayPubkey}, ${body.homeName || null}, ${body.awayName || null}, ${JSON.stringify(initialState)}::jsonb)
+      on conflict (id) do nothing
     `;
+
+    const persistedMatchRows = await query<{ id: string }>`
+      select id from matches where challenge_id = ${body.challengeId} limit 1
+    `;
+    const persistedMatchId = persistedMatchRows[0]?.id;
+    if (!persistedMatchId) {
+      res.status(500).json({ ok: false, error: 'Match not found after creation' });
+      return;
+    }
 
     await query`
       update challenges set state = 'in_match', updated_at = now() where id = ${body.challengeId}
     `;
 
-    res.status(200).json({ ok: true, matchId });
+    res.status(200).json({ ok: true, matchId: persistedMatchId });
   } catch (error) {
     res.status(500).json({
       ok: false,

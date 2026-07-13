@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Goal, LoaderCircle, Swords, Trophy, RotateCcw, Info, X, Volume2, VolumeX } from 'lucide-react';
+import { Goal, LoaderCircle, Swords, Trophy, Info, X, Volume2, VolumeX } from 'lucide-react';
 import { useChallengeStore } from './challenge/store';
 import TejoCanvas from './game/TejoCanvas';
 import { preparePhaseOneInfrastructure, usePhaseOneBoot } from './app/use-phase-one-boot';
@@ -58,7 +58,7 @@ export default function App() {
     && !isShotAnimating
     && !gameState.winner
     && gameState.phase === 'aiming'
-    && gameState.turn === 'away'
+    && gameState.turn === 'home'
     ? [
         gameState.turn,
         gameState.phase,
@@ -70,28 +70,28 @@ export default function App() {
       ].join(':')
     : null;
 
-  const creatorPubkey = activeMatchMeta?.homePubkey
+  const creatorPubkey = activeMatchMeta?.awayPubkey
     || (activeChallenge
       ? (activeChallenge.direction === 'outgoing' ? localPubkey : activeChallenge.rivalPubkey)
       : '');
-  const joinerPubkey = activeMatchMeta?.awayPubkey
+  const joinerPubkey = activeMatchMeta?.homePubkey
     || (activeChallenge
       ? (activeChallenge.direction === 'outgoing' ? activeChallenge.rivalPubkey : localPubkey)
       : '');
   const localTeam = activeMatchMeta
-    ? activeMatchMeta.homePubkey === localPubkey
-      ? 'home'
-      : activeMatchMeta.awayPubkey === localPubkey
-        ? 'away'
+    ? activeMatchMeta.awayPubkey === localPubkey
+      ? 'away'
+      : activeMatchMeta.homePubkey === localPubkey
+        ? 'home'
         : null
     : activeChallenge?.direction === 'outgoing'
-      ? 'home'
+      ? 'away'
       : activeChallenge?.direction === 'incoming'
-        ? 'away'
+        ? 'home'
         : null;
-  const creatorAlias = activeMatchMeta?.homeName
+  const creatorAlias = activeMatchMeta?.awayName
     || (creatorPubkey === localPubkey ? session.profile?.name || 'Local' : activeChallenge?.rivalName || 'Rival');
-  const joinerAlias = activeMatchMeta?.awayName
+  const joinerAlias = activeMatchMeta?.homeName
     || (joinerPubkey === localPubkey ? session.profile?.name || 'Local' : activeChallenge?.rivalName || 'Rival');
 
   const isOnlineInteractionBlocked = Boolean(
@@ -235,9 +235,9 @@ export default function App() {
     lastFinalizedChallengeRef.current = activeChallenge.id;
 
     const winnerPubkey = serverWinner === 'home'
-      ? creatorPubkey
+      ? joinerPubkey
       : serverWinner === 'away'
-        ? joinerPubkey
+        ? creatorPubkey
         : null;
 
     void finalizeChallengeWithResult(
@@ -401,10 +401,10 @@ export default function App() {
 
     const anim = activeShotAnimation;
     const animationHomeAlias = isTrainingMode
-      ? 'Local'
+      ? 'Máquina'
       : activeMatchMeta?.homeName || creatorAlias;
     const animationAwayAlias = isTrainingMode
-      ? 'Máquina'
+      ? 'Local'
       : activeMatchMeta?.awayName || joinerAlias;
 
     if (!anim.initialState || !anim.finalState || !Array.isArray(anim.frames) || anim.frames.length === 0) {
@@ -477,7 +477,7 @@ export default function App() {
           if (goalScored) {
             const goalScorer = finalState.score.home !== anim.initialState.score.home ? 'home' : 'away';
             const scorerName = goalScorer === 'home' ? animationHomeAlias : animationAwayAlias;
-            next.message = isTrainingMode && goalScorer === 'away'
+            next.message = isTrainingMode && goalScorer === 'home'
               ? 'GOL DE LA MAQUINA'
               : `¡GOL DE ${scorerName.toUpperCase()}!`;
             next.messageTimer = 120;
@@ -493,7 +493,7 @@ export default function App() {
             spawnParticles(next, shooterPos, 18, '#f87171', 3, 3);
           } else if (!anim.initialState.winner && finalState.winner) {
             const winnerName = finalState.winner === 'home' ? animationHomeAlias : animationAwayAlias;
-            next.message = isTrainingMode && finalState.winner === 'away'
+            next.message = isTrainingMode && finalState.winner === 'home'
               ? 'MAQUINA CAMPEON'
               : `¡${winnerName.toUpperCase()} CAMPEÓN!`;
             next.messageTimer = 120;
@@ -535,7 +535,7 @@ export default function App() {
     trainingAiTurnKeyRef.current = trainingAiTurnKey;
     const timeoutId = window.setTimeout(() => {
       const currentState = gameStateRef.current;
-      const shot = chooseTrainingAiShot(toMatchState(currentState), 'away');
+      const shot = chooseTrainingAiShot(toMatchState(currentState), 'home');
       if (!shot) {
         trainingAiTurnKeyRef.current = null;
         return;
@@ -560,7 +560,7 @@ export default function App() {
       if (matchState.turn !== localTeam || matchState.phase !== 'aiming') return;
     } else if (activeChallenge && gameStateRef.current.turn !== localTeam) {
       return;
-    } else if (!activeChallenge && !activeMatchId && gameStateRef.current.turn !== 'home') {
+    } else if (!activeChallenge && !activeMatchId && gameStateRef.current.turn !== 'away') {
       return;
     }
 
@@ -580,7 +580,7 @@ export default function App() {
       if (matchState.turn !== localTeam || matchState.phase !== 'aiming') return;
     } else if (activeChallenge && gameStateRef.current.turn !== localTeam) {
       return;
-    } else if (!activeChallenge && !activeMatchId && gameStateRef.current.turn !== 'home') {
+    } else if (!activeChallenge && !activeMatchId && gameStateRef.current.turn !== 'away') {
       return;
     }
 
@@ -611,7 +611,7 @@ export default function App() {
       if (matchState.turn !== localTeam || matchState.phase !== 'aiming') return;
     } else if (activeChallenge && gameStateRef.current.turn !== localTeam) {
       return;
-    } else if (!activeChallenge && !activeMatchId && gameStateRef.current.turn !== 'home') {
+    } else if (!activeChallenge && !activeMatchId && gameStateRef.current.turn !== 'away') {
       return;
     }
 
@@ -715,28 +715,36 @@ export default function App() {
     return `${Math.round(hours / 24)}d`;
   };
 
-  const homeAlias = activeMatchMeta?.homeName || creatorAlias;
-  const awayAlias = activeMatchMeta?.awayName || joinerAlias;
+  const homeAlias = activeChallenge ? joinerAlias : activeMatchMeta?.homeName || joinerAlias;
+  const awayAlias = activeChallenge ? creatorAlias : activeMatchMeta?.awayName || creatorAlias;
+  const displayedTurn = activeMatchId && matchState ? matchState.turn : gameState.turn;
+  const displayedBonusTurnTeam = activeMatchId && matchState ? matchState.bonusTurnTeam : gameState.bonusTurnTeam;
+  const displayedPendingBonusTurns = activeMatchId && matchState ? matchState.pendingBonusTurns : gameState.pendingBonusTurns;
+  const displayedPhase = activeMatchId && matchState ? matchState.phase : gameState.phase;
 
   const turnText = activeChallenge
-    ? gameState.turn === 'home'
+    ? displayedTurn === 'home'
       ? homeAlias.toUpperCase()
       : awayAlias.toUpperCase()
-    : gameState.turn === 'home'
-      ? 'LOCAL'
-      : 'RIVAL';
-  const isBonusTurn = gameState.turn === gameState.bonusTurnTeam && gameState.pendingBonusTurns > 0;
+    : isTrainingMode
+      ? displayedTurn === 'home'
+        ? 'MAQUINA'
+        : 'HUMANO'
+      : displayedTurn === 'home'
+        ? 'LOCAL'
+        : 'RIVAL';
+  const isBonusTurn = displayedTurn === displayedBonusTurnTeam && displayedPendingBonusTurns > 0;
   const turnDisplayText = isBonusTurn ? `${turnText} x2` : turnText;
-  const turnColor = gameState.turn === 'home' ? 'text-blue-400' : 'text-red-400';
-  const phaseText = gameState.phase === 'aiming' ? 'Apuntá y pateá' : 'En juego...';
+  const turnColor = displayedTurn === 'home' ? 'text-blue-400' : 'text-red-400';
+  const phaseText = displayedPhase === 'aiming' ? 'Apuntá y pateá' : 'En juego...';
 
   const rivalFallbackAvatar = `https://api.dicebear.com/9.x/bottts/svg?seed=${activeChallenge?.rivalPubkey || 'rival'}`;
 
   const homeIdentity = activeChallenge
     ? {
         name: homeAlias,
-        pubkey: creatorPubkey,
-        avatarUrl: creatorPubkey === localPubkey
+        pubkey: joinerPubkey,
+        avatarUrl: joinerPubkey === localPubkey
           ? session.profile?.avatarUrl || `https://api.dicebear.com/9.x/shapes/svg?seed=${session.profile?.pubkey || 'local'}`
           : rivalAvatarUrl || rivalFallbackAvatar,
       }
@@ -748,13 +756,17 @@ export default function App() {
             ? session.profile?.avatarUrl || `https://api.dicebear.com/9.x/shapes/svg?seed=${session.profile?.pubkey || 'local'}`
             : rivalAvatarUrl || rivalFallbackAvatar,
         }
-    : session.profile;
+    : {
+        name: 'Máquina',
+        pubkey: 'training-bot',
+        avatarUrl: 'https://api.dicebear.com/9.x/bottts/svg?seed=training-bot',
+      };
 
   const awayIdentity = activeChallenge
     ? {
         name: awayAlias,
-        pubkey: joinerPubkey,
-        avatarUrl: joinerPubkey === localPubkey
+        pubkey: creatorPubkey,
+        avatarUrl: creatorPubkey === localPubkey
           ? session.profile?.avatarUrl || `https://api.dicebear.com/9.x/shapes/svg?seed=${session.profile?.pubkey || 'away'}`
           : rivalAvatarUrl || rivalFallbackAvatar,
       }
@@ -767,15 +779,15 @@ export default function App() {
             : rivalAvatarUrl || rivalFallbackAvatar,
         }
     : {
-        name: 'Máquina',
-        pubkey: 'training-bot',
-        avatarUrl: 'https://api.dicebear.com/9.x/bottts/svg?seed=training-bot',
+        name: session.profile?.name || 'Humano',
+        pubkey: session.profile?.pubkey || 'training-human',
+        avatarUrl: session.profile?.avatarUrl || 'https://api.dicebear.com/9.x/shapes/svg?seed=training-human',
       };
 
   const winnerName = isTrainingMode
     ? gameState.winner === 'home'
-      ? 'Local'
-      : 'Maquina'
+      ? 'Maquina'
+      : 'Humano'
     : gameState.winner === 'home'
       ? homeAlias
       : awayAlias;
@@ -839,12 +851,6 @@ export default function App() {
             className={`rounded-lg bg-stone-800 hover:bg-stone-700 transition-colors ${isMobilePortrait ? 'p-1.5' : 'p-2'}`}
           >
             <Info size={16} />
-          </button>
-          <button
-            onClick={resetGame}
-            className={`rounded-lg bg-stone-800 hover:bg-stone-700 transition-colors ${isMobilePortrait ? 'p-1.5' : 'p-2'}`}
-          >
-            <RotateCcw size={16} />
           </button>
         </div>
       </header>

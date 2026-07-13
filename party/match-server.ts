@@ -1,5 +1,5 @@
 import type * as Party from 'partykit/server';
-import { compactMatchState, createInitialMatchState, simulateShotWithFrames, type MatchState } from '../shared/core-match-engine.ts';
+import { compactMatchState, createInitialMatchState, normalizeGoalTeams, recoverInvalidBallState, simulateShotWithFrames, swapMatchSides, type MatchState } from '../shared/core-match-engine.ts';
 import type { ActiveMatchSnapshot, MatchClientEvent, MatchServerEvent, MatchStatus } from '../shared/match-realtime.ts';
 import { getSql } from './neon.ts';
 
@@ -173,11 +173,44 @@ export default class MatchServer implements Party.Server {
     await this.loadPromise;
   }
 
+  private async normalizeSnapshotSides() {
+    if (!this.snapshot) return;
+
+    const challengeRows = await this.sql`
+      select owner_pubkey, rival_pubkey
+      from challenges
+      where id = ${this.snapshot.challengeId}
+      limit 1
+    ` as { owner_pubkey: string; rival_pubkey: string }[];
+
+    const challenge = challengeRows[0];
+    if (!challenge) return;
+
+    const creatorIsHome = this.snapshot.homePubkey === challenge.owner_pubkey && this.snapshot.awayPubkey === challenge.rival_pubkey;
+    if (!creatorIsHome) return;
+
+    this.snapshot = {
+      ...this.snapshot,
+      homePubkey: this.snapshot.awayPubkey,
+      awayPubkey: this.snapshot.homePubkey,
+      homeName: this.snapshot.awayName,
+      awayName: this.snapshot.homeName,
+      state: swapMatchSides(this.snapshot.state),
+    };
+
+    await this.persistSnapshot();
+  }
+
   private async loadSnapshot() {
     const matchId = decodePartyId(this.room.id);
     const stored = await this.room.storage.get<PersistedSnapshot>('snapshot');
     if (stored) {
       this.snapshot = { ...stored, state: compactMatchState(stored.state), latestShotAnimation: null };
+      await this.normalizeSnapshotSides();
+      this.snapshot.state = normalizeGoalTeams(this.snapshot.state);
+      if (recoverInvalidBallState(this.snapshot.state)) {
+        await this.persistSnapshot();
+      }
       return;
     }
 
@@ -212,6 +245,13 @@ export default class MatchServer implements Party.Server {
       updatedAt: match.updated_at,
     };
 
+    await this.normalizeSnapshotSides();
+    this.snapshot.state = normalizeGoalTeams(this.snapshot.state);
+
+    if (recoverInvalidBallState(this.snapshot.state)) {
+      await this.persistSnapshot();
+    }
+
     await this.room.storage.put('snapshot', toPersistedSnapshot(this.snapshot));
   }
 
@@ -219,6 +259,14 @@ export default class MatchServer implements Party.Server {
     if (!this.snapshot) {
       throw new Error('Match snapshot is not loaded');
     }
+
+    const goalNormalizedState = normalizeGoalTeams(this.snapshot.state);
+    if (goalNormalizedState !== this.snapshot.state) {
+      this.snapshot.state = goalNormalizedState;
+      void this.persistSnapshot();
+    }
+
+    recoverInvalidBallState(this.snapshot.state);
 
     return { ...this.snapshot };
   }
