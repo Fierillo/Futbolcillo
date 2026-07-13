@@ -93,6 +93,65 @@ function dedupeProfiles(profiles: CachedProfile[]) {
   });
 }
 
+async function fetchFollowedPubkeys(ndk: NDK, pubkey: string) {
+  return await new Promise<string[]>((resolve) => {
+    const collected: Array<{ createdAt: number; pubkeys: string[] }> = [];
+    const subscription = ndk.subscribe(
+      {
+        kinds: [3],
+        authors: [pubkey],
+        limit: 5,
+      },
+      {
+        closeOnEose: true,
+        onEvent: (event) => {
+          const followedPubkeys = event.tags
+            .filter((tag) => tag[0] === 'p' && tag[1])
+            .map((tag) => tag[1]);
+
+          collected.push({
+            createdAt: event.created_at ?? 0,
+            pubkeys: followedPubkeys,
+          });
+        },
+        onEose: () => {
+          subscription.stop();
+          const latest = collected.sort((a, b) => b.createdAt - a.createdAt)[0];
+          resolve(latest ? Array.from(new Set(latest.pubkeys)) : []);
+        },
+      }
+    );
+  });
+}
+
+async function hydrateProfiles(ndk: NDK, pubkeys: string[]) {
+  return await Promise.all(
+    pubkeys.slice(0, 50).map(async (pubkey) => {
+      const user = ndk.getUser({ pubkey });
+      const cachedProfile = await cacheDb.profiles.get(pubkey);
+      const remoteProfile = await user.fetchProfile().catch(() => undefined);
+
+      const profile: CachedProfile = {
+        pubkey,
+        avatarUrl: remoteProfile?.image || remoteProfile?.picture || cachedProfile?.avatarUrl || `https://api.dicebear.com/9.x/shapes/svg?seed=${pubkey}`,
+        displayName: remoteProfile?.displayName || remoteProfile?.name || cachedProfile?.displayName || `Rival ${pubkey.slice(0, 8)}`,
+        nip05: remoteProfile?.nip05 || cachedProfile?.nip05 || '',
+        lud16: remoteProfile?.lud16 || cachedProfile?.lud16 || '',
+        updatedAt: Date.now(),
+      };
+
+      await cacheDb.profiles.put(profile);
+      return profile;
+    })
+  );
+}
+
+async function resolveProfileByPubkey(pubkey: string, ndk: NDK) {
+  await ndk.connect(1500);
+  const [profile] = await hydrateProfiles(ndk, [pubkey]);
+  return profile;
+}
+
 function normalizePubkey(input: string, profiles: CachedProfile[]) {
   const value = input.trim();
   if (!value) return '';
@@ -215,26 +274,12 @@ export function ChallengeProvider({ children }: { children: ReactNode }) {
       await ndk.connect(1500);
 
       const currentUser = ndk.getUser({ pubkey: session.pubkey });
-      const followedUsers = await currentUser.follows(undefined, false);
+      const followedUsers = await currentUser.follows(undefined, false).catch(() => new Set<{ pubkey: string }>());
+      const followedPubkeysFromApi = Array.from(followedUsers).map((user) => user.pubkey);
+      const followedPubkeysFromContacts = await fetchFollowedPubkeys(ndk, session.pubkey);
+      const followedPubkeys = Array.from(new Set([...followedPubkeysFromApi, ...followedPubkeysFromContacts]));
 
-      let hydratedProfiles = await Promise.all(
-        Array.from(followedUsers).slice(0, 20).map(async (user) => {
-          const cachedProfile = await cacheDb.profiles.get(user.pubkey);
-          const remoteProfile = await user.fetchProfile().catch(() => undefined);
-
-          const profile: CachedProfile = {
-            pubkey: user.pubkey,
-            avatarUrl: remoteProfile?.image || remoteProfile?.picture || cachedProfile?.avatarUrl || `https://api.dicebear.com/9.x/shapes/svg?seed=${user.pubkey}`,
-            displayName: remoteProfile?.displayName || remoteProfile?.name || cachedProfile?.displayName || `Rival ${user.pubkey.slice(0, 8)}`,
-            nip05: remoteProfile?.nip05 || cachedProfile?.nip05 || '',
-            lud16: remoteProfile?.lud16 || cachedProfile?.lud16 || '',
-            updatedAt: Date.now(),
-          };
-
-          await cacheDb.profiles.put(profile);
-          return profile;
-        })
-      );
+      let hydratedProfiles = await hydrateProfiles(ndk, followedPubkeys);
 
       if (hydratedProfiles.length === 0) {
         const cachedProfiles = await cacheDb.profiles.toArray();
@@ -541,6 +586,38 @@ export function ChallengeProvider({ children }: { children: ReactNode }) {
     setChallengeError('');
   }, []);
 
+  useEffect(() => {
+    const rawInput = draft.rivalInput.trim();
+    if (!rawInput) return;
+    if (!rawInput.startsWith('npub') && !/^[a-f0-9]{64}$/i.test(rawInput)) return;
+
+    let cancelled = false;
+
+    const hydrateTypedRival = async () => {
+      try {
+        const pubkey = normalizePubkey(rawInput, []);
+        const cachedProfile = await cacheDb.profiles.get(pubkey);
+        if (cachedProfile && !cancelled) {
+          return;
+        }
+
+        const ndk = getNostrClient();
+        await ndk.connect(1500);
+        const profile = await resolveProfileByPubkey(pubkey, ndk);
+        if (cancelled || !profile) return;
+
+        setKnownRivals((prev) => dedupeProfiles([profile, ...prev]));
+      } catch {
+        // Ignore invalid or not-yet-resolvable pubkeys while typing.
+      }
+    };
+
+    void hydrateTypedRival();
+    return () => {
+      cancelled = true;
+    };
+  }, [draft.rivalInput]);
+
   const rivalMatches = useMemo(() => {
     const value = normalizeSearchText(draft.rivalInput);
     if (value.length < 2) return [];
@@ -575,7 +652,11 @@ export function ChallengeProvider({ children }: { children: ReactNode }) {
     try {
       const rivalPubkey = draft.rivalPubkey || normalizePubkey(draft.rivalInput, dedupeProfiles([...followingRivals, ...knownRivals]));
       const now = Date.now();
-      const selectedProfile = dedupeProfiles([...followingRivals, ...knownRivals]).find((profile) => profile.pubkey === rivalPubkey);
+      const ndk = getNostrClient();
+      const cachedProfile = await cacheDb.profiles.get(rivalPubkey);
+      const selectedProfile = dedupeProfiles([...followingRivals, ...knownRivals]).find((profile) => profile.pubkey === rivalPubkey)
+        || cachedProfile
+        || await resolveProfileByPubkey(rivalPubkey, ndk).catch(() => null);
       const challenge: CachedChallenge = {
         id: generateChallengeId(),
         accessToken: generateChallengeAccessToken(),
