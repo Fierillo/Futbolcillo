@@ -1,5 +1,7 @@
 import { useRef, useEffect, useCallback } from 'react';
 import { GameState, FIELD_WIDTH, FIELD_HEIGHT } from './types';
+import { MAX_SHOOT_POWER } from './physics';
+import { getMinimumShotDragDistance, getShotPowerFromDragDistance } from './local-game';
 
 interface Props {
   gameState: GameState;
@@ -224,9 +226,9 @@ export default function TejoCanvas({ gameState, onMouseDown, onMouseMove, onMous
       const dx = gameState.dragStart.x - gameState.dragCurrent.x;
       const dy = gameState.dragStart.y - gameState.dragCurrent.y;
       const dragDistance = Math.sqrt(dx * dx + dy * dy);
-      const power = dragDistance * 0.15;
-      const maxPower = 18;
-      const ratio = Math.min(power / maxPower, 1);
+      const power = getShotPowerFromDragDistance(dragDistance);
+      const ratio = Math.min(power / MAX_SHOOT_POWER, 1);
+      const isShotReady = dragDistance > getMinimumShotDragDistance(player.radius);
       const guideLength = 40 + ratio * 80;
       const directionLength = dragDistance || 1;
       const guideEndX = player.pos.x + (dx / directionLength) * guideLength;
@@ -235,7 +237,34 @@ export default function TejoCanvas({ gameState, onMouseDown, onMouseMove, onMous
       // Power indicator color
       const r = Math.floor(255 * ratio);
       const g = Math.floor(255 * (1 - ratio));
-      const color = `rgb(${r}, ${g}, 100)`;
+      const color = isShotReady ? `rgb(${r}, ${g}, 100)` : 'rgb(148, 163, 184)';
+
+      if (!isShotReady) {
+        ctx.strokeStyle = 'rgba(248, 113, 113, 0.7)';
+        ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        ctx.arc(player.pos.x, player.pos.y, player.radius, 0, Math.PI * 2);
+        ctx.stroke();
+
+        ctx.setLineDash([4, 6]);
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.25)';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.arc(player.pos.x, player.pos.y, player.radius + 16, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        return;
+      }
+
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.18)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(player.pos.x, player.pos.y);
+      ctx.lineTo(
+        player.pos.x + (dx / directionLength) * guideLength,
+        player.pos.y + (dy / directionLength) * guideLength,
+      );
+      ctx.stroke();
 
       ctx.strokeStyle = color;
       ctx.lineWidth = 3 + ratio * 3;

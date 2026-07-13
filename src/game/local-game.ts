@@ -2,6 +2,8 @@ import type { MatchState, PhysicsBall, PhysicsPlayer } from './physics';
 import { createInitialMatchState, MAX_SHOOT_POWER } from './physics';
 import type { GameState, Particle, Vec2 } from './types';
 
+export const SHOT_POWER_SCALE = 0.15;
+
 interface LocalShotCandidate {
   playerIndex: number;
   playerTeam: 'home' | 'away';
@@ -26,6 +28,14 @@ function normalize(v: Vec2): Vec2 {
 
 function clamp(val: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, val));
+}
+
+export function getShotPowerFromDragDistance(dragDistance: number) {
+  return dragDistance * SHOT_POWER_SCALE;
+}
+
+export function getMinimumShotDragDistance(playerRadius: number) {
+  return playerRadius;
 }
 
 export function createVisualPlayers(players: PhysicsPlayer[]): GameState['players'] {
@@ -174,11 +184,12 @@ export function consumeShotInput(state: GameState): LocalShotCandidate | null {
   const player = state.players[state.selectedPlayer];
   const dx = state.dragStart.x - state.dragCurrent.x;
   const dy = state.dragStart.y - state.dragCurrent.y;
-  const power = Math.sqrt(dx * dx + dy * dy) * 0.15;
+  const dragDistance = Math.sqrt(dx * dx + dy * dy);
+  const power = getShotPowerFromDragDistance(dragDistance);
   const clampedPower = clamp(power, 0, MAX_SHOOT_POWER);
 
   clearPointerSelection(state);
-  if (clampedPower <= 1) return null;
+  if (dragDistance <= getMinimumShotDragDistance(player.radius)) return null;
 
   const dir = normalize(vec2(dx, dy));
   return {
