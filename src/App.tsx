@@ -681,6 +681,17 @@ export default function App() {
     setGameState(createInitialState());
   };
 
+  const leaveActiveChallenge = useCallback(() => {
+    lastProcessedChallengeRef.current = null;
+    lastFinalizedChallengeRef.current = null;
+    lastSyncedChallengeScoreRef.current = '';
+    setLocalShotAnimation(null);
+    clearMatch();
+    clearActiveChallenge();
+    setShowNostrGateway(false);
+    setGameState(createInitialState());
+  }, [clearActiveChallenge, clearMatch]);
+
   const retrySync = async () => {
       setSyncState({
         status: 'syncing',
@@ -828,6 +839,16 @@ export default function App() {
 
         <div className={`flex items-center gap-2 ${isMobilePortrait ? 'flex-wrap justify-center' : ''}`}>
           <GlobalSyncStatus onRetry={retrySync} />
+          {activeChallenge && (
+            <button
+              type="button"
+              onClick={leaveActiveChallenge}
+              className={`flex items-center gap-2 rounded-lg bg-stone-800 text-sm font-bold uppercase tracking-wider text-white transition-colors hover:bg-stone-700 ${isMobilePortrait ? 'px-2 py-1.5 text-xs' : 'px-3 py-2'}`}
+            >
+              <X size={14} />
+              Salir
+            </button>
+          )}
           <button
             onClick={() => setShowNostrGateway(true)}
             className={`relative flex items-center gap-2 rounded-lg bg-emerald-700 text-sm font-bold uppercase tracking-wider text-white transition-colors hover:bg-emerald-600 ${isMobilePortrait ? 'px-2 py-1.5 text-xs' : 'px-3 py-2'}`}
