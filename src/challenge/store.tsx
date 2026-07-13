@@ -79,6 +79,20 @@ function generateChallengeAccessToken() {
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
+function normalizeSearchText(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+}
+
+function dedupeProfiles(profiles: CachedProfile[]) {
+  return profiles.filter((profile, index, list) => {
+    return list.findIndex((candidate) => candidate.pubkey === profile.pubkey) === index;
+  });
+}
+
 function normalizePubkey(input: string, profiles: CachedProfile[]) {
   const value = input.trim();
   if (!value) return '';
@@ -95,9 +109,10 @@ function normalizePubkey(input: string, profiles: CachedProfile[]) {
     return value.toLowerCase();
   }
 
-  const normalizedValue = value.toLowerCase();
+  const normalizedValue = normalizeSearchText(value);
   const profileMatch = profiles.find((profile) => {
-    return profile.displayName.toLowerCase() === normalizedValue || profile.nip05.toLowerCase() === normalizedValue;
+    return normalizeSearchText(profile.displayName) === normalizedValue
+      || normalizeSearchText(profile.nip05) === normalizedValue;
   });
 
   if (profileMatch) {
@@ -176,6 +191,7 @@ export function ChallengeProvider({ children }: { children: ReactNode }) {
   const [challenges, setChallenges] = useState<CachedChallenge[]>([]);
   const [recentRivals, setRecentRivals] = useState<CachedProfile[]>([]);
   const [followingRivals, setFollowingRivals] = useState<CachedProfile[]>([]);
+  const [knownRivals, setKnownRivals] = useState<CachedProfile[]>([]);
   const [linkedChallenge, setLinkedChallenge] = useState<CachedChallenge | null>(null);
   const [activeChallenge, setActiveChallenge] = useState<CachedChallenge | null>(null);
   const [draft, setDraftState] = useState<ChallengeDraft>(defaultDraft);
@@ -201,7 +217,7 @@ export function ChallengeProvider({ children }: { children: ReactNode }) {
       const currentUser = ndk.getUser({ pubkey: session.pubkey });
       const followedUsers = await currentUser.follows(undefined, false);
 
-      const hydratedProfiles = await Promise.all(
+      let hydratedProfiles = await Promise.all(
         Array.from(followedUsers).slice(0, 20).map(async (user) => {
           const cachedProfile = await cacheDb.profiles.get(user.pubkey);
           const remoteProfile = await user.fetchProfile().catch(() => undefined);
@@ -220,7 +236,12 @@ export function ChallengeProvider({ children }: { children: ReactNode }) {
         })
       );
 
-      setFollowingRivals(hydratedProfiles);
+      if (hydratedProfiles.length === 0) {
+        const cachedProfiles = await cacheDb.profiles.toArray();
+        hydratedProfiles = cachedProfiles.filter((profile) => profile.pubkey !== session.pubkey).slice(0, 20);
+      }
+
+      setFollowingRivals(dedupeProfiles(hydratedProfiles));
     } catch {
       setFollowingRivals([]);
     }
@@ -230,6 +251,7 @@ export function ChallengeProvider({ children }: { children: ReactNode }) {
     if (!session.pubkey) {
       setChallenges([]);
       setRecentRivals([]);
+      setKnownRivals([]);
       setLinkedChallenge(null);
       setActiveChallenge(null);
       return;
@@ -378,6 +400,7 @@ export function ChallengeProvider({ children }: { children: ReactNode }) {
     }
 
     setChallenges(normalizedRecords);
+    setKnownRivals(filteredProfiles);
     setRecentRivals(filteredProfiles.slice(0, 6));
   }, [session.pubkey]);
 
@@ -519,19 +542,16 @@ export function ChallengeProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const rivalMatches = useMemo(() => {
-    const value = draft.rivalInput.trim().toLowerCase();
+    const value = normalizeSearchText(draft.rivalInput);
     if (value.length < 2) return [];
 
-    const combinedProfiles = [...followingRivals, ...recentRivals];
-    const dedupedProfiles = combinedProfiles.filter((profile, index, list) => {
-      return list.findIndex((candidate) => candidate.pubkey === profile.pubkey) === index;
-    });
+    const dedupedProfiles = dedupeProfiles([...followingRivals, ...knownRivals]);
 
     const scoredProfiles = dedupedProfiles
       .filter((profile) => {
         return (
-          profile.displayName.toLowerCase().includes(value) ||
-          profile.nip05.toLowerCase().includes(value) ||
+          normalizeSearchText(profile.displayName).includes(value) ||
+          normalizeSearchText(profile.nip05).includes(value) ||
           profile.pubkey.toLowerCase().includes(value)
         );
       })
@@ -544,7 +564,7 @@ export function ChallengeProvider({ children }: { children: ReactNode }) {
       .map((entry) => entry.profile);
 
     return scoredProfiles;
-  }, [draft.rivalInput, followingRivals, recentRivals]);
+  }, [draft.rivalInput, followingRivals, knownRivals]);
 
   const createChallenge = useCallback(async () => {
     if (!session.pubkey) {
@@ -553,9 +573,9 @@ export function ChallengeProvider({ children }: { children: ReactNode }) {
     }
 
     try {
-      const rivalPubkey = draft.rivalPubkey || normalizePubkey(draft.rivalInput, recentRivals);
+      const rivalPubkey = draft.rivalPubkey || normalizePubkey(draft.rivalInput, dedupeProfiles([...followingRivals, ...knownRivals]));
       const now = Date.now();
-      const selectedProfile = [...followingRivals, ...recentRivals].find((profile) => profile.pubkey === rivalPubkey);
+      const selectedProfile = dedupeProfiles([...followingRivals, ...knownRivals]).find((profile) => profile.pubkey === rivalPubkey);
       const challenge: CachedChallenge = {
         id: generateChallengeId(),
         accessToken: generateChallengeAccessToken(),
