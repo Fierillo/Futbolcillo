@@ -109,6 +109,7 @@ function toCachedProfile(pubkey: string, profile?: Partial<CachedProfile>): Cach
     pubkey,
     avatarUrl: profile?.avatarUrl || fallbackAvatar(pubkey),
     displayName: label,
+    contactAlias: profile?.contactAlias || '',
     nip05: profile?.nip05 || '',
     lud16: profile?.lud16 || '',
     updatedAt: profile?.updatedAt || Date.now(),

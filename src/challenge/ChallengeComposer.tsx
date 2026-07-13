@@ -46,7 +46,7 @@ export function ChallengeComposer() {
             <div className="mt-2">
               <p className="mb-1 text-[11px] font-semibold uppercase tracking-[0.22em] text-stone-500">Siguiendo</p>
               <div className="flex flex-wrap gap-2">
-                {followingRivals.slice(0, 8).map((profile) => (
+              {followingRivals.slice(0, 8).map((profile) => (
                   <button
                     key={profile.pubkey}
                     type="button"
@@ -56,8 +56,8 @@ export function ChallengeComposer() {
                     }}
                     className="flex items-center gap-2 rounded-full border border-emerald-700/30 bg-stone-900/70 px-2.5 py-1.5 text-xs text-stone-300 transition-colors hover:border-emerald-500/60 hover:text-white"
                   >
-                    <img src={profile.avatarUrl} alt={profile.displayName} className="h-5 w-5 rounded-full object-cover" />
-                    <span className="max-w-[110px] truncate">{profile.displayName}</span>
+                    <img src={profile.avatarUrl} alt={profile.contactAlias || profile.displayName} className="h-5 w-5 rounded-full object-cover" />
+                    <span className="max-w-[110px] truncate">{profile.contactAlias || profile.displayName}</span>
                   </button>
                 ))}
               </div>
@@ -73,10 +73,10 @@ export function ChallengeComposer() {
                   onClick={() => selectRival(profile)}
                   className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm text-stone-300 transition-colors hover:bg-stone-800 hover:text-white"
                 >
-                  <img src={profile.avatarUrl} alt={profile.displayName} className="h-6 w-6 rounded-full object-cover" />
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                      <p className="truncate text-sm font-medium">{profile.displayName}</p>
+                    <img src={profile.avatarUrl} alt={profile.contactAlias || profile.displayName} className="h-6 w-6 rounded-full object-cover" />
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <p className="truncate text-sm font-medium">{profile.contactAlias || profile.displayName}</p>
                       {followingRivals.some((followed) => followed.pubkey === profile.pubkey) && (
                         <span className="rounded-full bg-emerald-900/60 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-emerald-200">
                           Following
@@ -107,11 +107,11 @@ export function ChallengeComposer() {
                   }}
                   className="flex items-center gap-2 rounded-full border border-stone-700 bg-stone-900/70 px-2.5 py-1.5 text-xs text-stone-300 transition-colors hover:border-emerald-600/60 hover:text-white"
                 >
-                  <img src={profile.avatarUrl} alt={profile.displayName} className="h-5 w-5 rounded-full object-cover" />
-                  <span className="max-w-[110px] truncate">{profile.displayName}</span>
-                </button>
-              ))}
-            </div>
+                    <img src={profile.avatarUrl} alt={profile.contactAlias || profile.displayName} className="h-5 w-5 rounded-full object-cover" />
+                    <span className="max-w-[110px] truncate">{profile.contactAlias || profile.displayName}</span>
+                  </button>
+                ))}
+              </div>
           </div>
         )}
 

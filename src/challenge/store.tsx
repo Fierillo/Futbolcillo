@@ -1,8 +1,8 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import NDK, { NDKEvent, NDKKind } from '@nostr-dev-kit/ndk';
-import { nip19 } from 'nostr-tools';
+import { nip19, SimplePool } from 'nostr-tools';
 import { cacheDb } from '../cache/db';
-import { getNostrClient } from '../nostr/client';
+import { getNostrClient, getRelayList } from '../nostr/client';
 import { useNostrSession } from '../nostr/session-store';
 import type { CachedChallenge, ChallengeFilter, ChallengeMode, ChallengeState } from './types';
 import type { CachedProfile } from '../profile/types';
@@ -93,57 +93,108 @@ function dedupeProfiles(profiles: CachedProfile[]) {
   });
 }
 
-async function fetchFollowedPubkeys(ndk: NDK, pubkey: string) {
-  return await new Promise<string[]>((resolve) => {
-    const collected: Array<{ createdAt: number; pubkeys: string[] }> = [];
-    const subscription = ndk.subscribe(
-      {
-        kinds: [3],
-        authors: [pubkey],
-        limit: 5,
-      },
-      {
-        closeOnEose: true,
-        onEvent: (event) => {
-          const followedPubkeys = event.tags
-            .filter((tag) => tag[0] === 'p' && tag[1])
-            .map((tag) => tag[1]);
-
-          collected.push({
-            createdAt: event.created_at ?? 0,
-            pubkeys: followedPubkeys,
-          });
-        },
-        onEose: () => {
-          subscription.stop();
-          const latest = collected.sort((a, b) => b.createdAt - a.createdAt)[0];
-          resolve(latest ? Array.from(new Set(latest.pubkeys)) : []);
-        },
-      }
-    );
-  });
+function isExplicitPubkeyInput(value: string) {
+  const trimmed = value.trim();
+  return trimmed.startsWith('npub') || /^[a-f0-9]{64}$/i.test(trimmed);
 }
 
-async function hydrateProfiles(ndk: NDK, pubkeys: string[]) {
-  return await Promise.all(
-    pubkeys.slice(0, 50).map(async (pubkey) => {
-      const user = ndk.getUser({ pubkey });
-      const cachedProfile = await cacheDb.profiles.get(pubkey);
-      const remoteProfile = await user.fetchProfile().catch(() => undefined);
+async function fetchPreferredRelayUrls(pubkey: string) {
+  const baseRelays = [
+    ...getRelayList(),
+    'wss://relay.nostr.band',
+    'wss://purplepag.es',
+    'wss://offchain.pub',
+  ];
+  const pool = new SimplePool();
 
-      const profile: CachedProfile = {
-        pubkey,
-        avatarUrl: remoteProfile?.image || remoteProfile?.picture || cachedProfile?.avatarUrl || `https://api.dicebear.com/9.x/shapes/svg?seed=${pubkey}`,
-        displayName: remoteProfile?.displayName || remoteProfile?.name || cachedProfile?.displayName || `Rival ${pubkey.slice(0, 8)}`,
-        nip05: remoteProfile?.nip05 || cachedProfile?.nip05 || '',
-        lud16: remoteProfile?.lud16 || cachedProfile?.lud16 || '',
-        updatedAt: Date.now(),
-      };
+  try {
+    const relayEvents = await pool.querySync(baseRelays, {
+      kinds: [10002],
+      authors: [pubkey],
+      limit: 5,
+    });
 
-      await cacheDb.profiles.put(profile);
-      return profile;
-    })
-  );
+    const discoveredRelays = relayEvents.flatMap((event) => {
+      return event.tags
+        .filter((tag) => tag[0] === 'r' && tag[1])
+        .map((tag) => tag[1]);
+    });
+
+    return Array.from(new Set([...baseRelays, ...discoveredRelays]));
+  } catch {
+    return Array.from(new Set(baseRelays));
+  } finally {
+    pool.close(baseRelays);
+  }
+}
+
+async function fetchFollowedPubkeys(pubkey: string) {
+  const relayUrls = await fetchPreferredRelayUrls(pubkey);
+  const pool = new SimplePool();
+
+  try {
+    const contactEvents = await pool.querySync(relayUrls, {
+      kinds: [3],
+      authors: [pubkey],
+      limit: 10,
+    });
+
+    const latest = [...contactEvents].sort((a, b) => {
+      const createdAtDelta = (b.created_at ?? 0) - (a.created_at ?? 0);
+      if (createdAtDelta !== 0) return createdAtDelta;
+      return b.tags.length - a.tags.length;
+    })[0];
+
+    if (!latest) {
+      return [];
+    }
+
+    return latest.tags
+      .filter((tag) => tag[0] === 'p' && tag[1])
+      .map((tag) => ({
+        pubkey: tag[1],
+        petname: tag[3] || '',
+      }))
+      .filter((contact, index, list) => {
+        return list.findIndex((candidate) => candidate.pubkey === contact.pubkey) === index;
+      });
+  } finally {
+    pool.close(relayUrls);
+  }
+}
+
+async function hydrateProfiles(ndk: NDK, pubkeys: string[], petnames: Record<string, string> = {}) {
+  const uniquePubkeys = Array.from(new Set(pubkeys));
+  const profiles: CachedProfile[] = [];
+
+  for (let i = 0; i < uniquePubkeys.length; i += 25) {
+    const batch = uniquePubkeys.slice(i, i + 25);
+    const batchProfiles = await Promise.all(
+      batch.map(async (pubkey) => {
+        const user = ndk.getUser({ pubkey });
+        const cachedProfile = await cacheDb.profiles.get(pubkey);
+        const remoteProfile = await user.fetchProfile().catch(() => undefined);
+        const petname = petnames[pubkey] || '';
+
+        const profile: CachedProfile = {
+          pubkey,
+          avatarUrl: remoteProfile?.image || remoteProfile?.picture || cachedProfile?.avatarUrl || `https://api.dicebear.com/9.x/shapes/svg?seed=${pubkey}`,
+          displayName: remoteProfile?.displayName || remoteProfile?.name || cachedProfile?.displayName || petname || `Rival ${pubkey.slice(0, 8)}`,
+          contactAlias: petname || cachedProfile?.contactAlias || '',
+          nip05: remoteProfile?.nip05 || cachedProfile?.nip05 || '',
+          lud16: remoteProfile?.lud16 || cachedProfile?.lud16 || '',
+          updatedAt: Date.now(),
+        };
+
+        await cacheDb.profiles.put(profile);
+        return profile;
+      })
+    );
+
+    profiles.push(...batchProfiles);
+  }
+
+  return profiles;
 }
 
 async function resolveProfileByPubkey(pubkey: string, ndk: NDK) {
@@ -171,6 +222,7 @@ function normalizePubkey(input: string, profiles: CachedProfile[]) {
   const normalizedValue = normalizeSearchText(value);
   const profileMatch = profiles.find((profile) => {
     return normalizeSearchText(profile.displayName) === normalizedValue
+      || normalizeSearchText(profile.contactAlias || '') === normalizedValue
       || normalizeSearchText(profile.nip05) === normalizedValue;
   });
 
@@ -186,7 +238,7 @@ function isFinishedState(state: ChallengeState) {
 }
 
 function resolveRivalName(pubkey: string, profile?: CachedProfile | null, fallbackName?: string | null) {
-  return profile?.displayName || profile?.nip05 || fallbackName || `Rival ${pubkey.slice(0, 8)}`;
+  return profile?.contactAlias || profile?.displayName || profile?.nip05 || fallbackName || `Rival ${pubkey.slice(0, 8)}`;
 }
 
 async function sendChallengeDirectMessage(
@@ -276,17 +328,25 @@ export function ChallengeProvider({ children }: { children: ReactNode }) {
       const currentUser = ndk.getUser({ pubkey: session.pubkey });
       const followedUsers = await currentUser.follows(undefined, false).catch(() => new Set<{ pubkey: string }>());
       const followedPubkeysFromApi = Array.from(followedUsers).map((user) => user.pubkey);
-      const followedPubkeysFromContacts = await fetchFollowedPubkeys(ndk, session.pubkey);
-      const followedPubkeys = Array.from(new Set([...followedPubkeysFromApi, ...followedPubkeysFromContacts]));
+      const followedContacts = await fetchFollowedPubkeys(session.pubkey);
+      const petnamesByPubkey = followedContacts.reduce<Record<string, string>>((acc, contact) => {
+        if (contact.petname) {
+          acc[contact.pubkey] = contact.petname;
+        }
+        return acc;
+      }, {});
+      const followedPubkeysFromContacts = followedContacts.map((contact) => contact.pubkey);
+      const followedPubkeys = Array.from(new Set([...followedPubkeysFromApi, ...followedPubkeysFromContacts]))
+        .filter((pubkey) => pubkey && pubkey !== session.pubkey);
 
-      let hydratedProfiles = await hydrateProfiles(ndk, followedPubkeys);
+      let hydratedProfiles = await hydrateProfiles(ndk, followedPubkeys, petnamesByPubkey);
 
       if (hydratedProfiles.length === 0) {
         const cachedProfiles = await cacheDb.profiles.toArray();
         hydratedProfiles = cachedProfiles.filter((profile) => profile.pubkey !== session.pubkey).slice(0, 20);
       }
 
-      setFollowingRivals(dedupeProfiles(hydratedProfiles));
+      setFollowingRivals(dedupeProfiles(hydratedProfiles).filter((profile) => profile.pubkey !== session.pubkey));
     } catch {
       setFollowingRivals([]);
     }
@@ -580,7 +640,7 @@ export function ChallengeProvider({ children }: { children: ReactNode }) {
   const selectRival = useCallback((profile: CachedProfile) => {
     setDraftState((prev) => ({
       ...prev,
-      rivalInput: profile.displayName || profile.nip05 || profile.pubkey,
+      rivalInput: profile.contactAlias || profile.displayName || profile.nip05 || profile.pubkey,
       rivalPubkey: profile.pubkey,
     }));
     setChallengeError('');
@@ -589,24 +649,44 @@ export function ChallengeProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const rawInput = draft.rivalInput.trim();
     if (!rawInput) return;
-    if (!rawInput.startsWith('npub') && !/^[a-f0-9]{64}$/i.test(rawInput)) return;
+    if (!isExplicitPubkeyInput(rawInput)) return;
 
     let cancelled = false;
 
     const hydrateTypedRival = async () => {
       try {
         const pubkey = normalizePubkey(rawInput, []);
+        if (!cancelled) {
+          setDraftState((prev) => {
+            if (prev.rivalInput.trim() !== rawInput) return prev;
+            if (prev.rivalPubkey === pubkey) return prev;
+            return {
+              ...prev,
+              rivalPubkey: pubkey,
+            };
+          });
+        }
+
         const cachedProfile = await cacheDb.profiles.get(pubkey);
         if (cachedProfile && !cancelled) {
+          setKnownRivals((prev) => dedupeProfiles([cachedProfile, ...prev]));
           return;
         }
 
         const ndk = getNostrClient();
         await ndk.connect(1500);
         const profile = await resolveProfileByPubkey(pubkey, ndk);
-        if (cancelled || !profile) return;
+        if (cancelled || !profile || profile.pubkey === session.pubkey) return;
 
         setKnownRivals((prev) => dedupeProfiles([profile, ...prev]));
+        setDraftState((prev) => {
+          if (prev.rivalInput.trim() !== rawInput) return prev;
+          if (prev.rivalPubkey === profile.pubkey) return prev;
+          return {
+            ...prev,
+            rivalPubkey: profile.pubkey,
+          };
+        });
       } catch {
         // Ignore invalid or not-yet-resolvable pubkeys while typing.
       }
@@ -616,25 +696,41 @@ export function ChallengeProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [draft.rivalInput]);
+  }, [draft.rivalInput, session.pubkey]);
 
   const rivalMatches = useMemo(() => {
     const value = normalizeSearchText(draft.rivalInput);
     if (value.length < 2) return [];
 
     const dedupedProfiles = dedupeProfiles([...followingRivals, ...knownRivals]);
+    const typedPubkey = (() => {
+      const rawInput = draft.rivalInput.trim();
+      if (!isExplicitPubkeyInput(rawInput)) return '';
+
+      try {
+        return normalizePubkey(rawInput, []);
+      } catch {
+        return '';
+      }
+    })();
 
     const scoredProfiles = dedupedProfiles
       .filter((profile) => {
         return (
+          profile.pubkey === typedPubkey ||
           normalizeSearchText(profile.displayName).includes(value) ||
+          normalizeSearchText(profile.contactAlias || '').includes(value) ||
           normalizeSearchText(profile.nip05).includes(value) ||
           profile.pubkey.toLowerCase().includes(value)
         );
       })
       .map((profile) => ({
         profile,
-        score: followingRivals.some((followed) => followed.pubkey === profile.pubkey) ? 2 : 1,
+        score: profile.pubkey === typedPubkey
+          ? 4
+          : followingRivals.some((followed) => followed.pubkey === profile.pubkey)
+            ? 2
+            : 1,
       }))
       .sort((a, b) => b.score - a.score || b.profile.updatedAt - a.profile.updatedAt)
       .slice(0, 6)
@@ -650,7 +746,14 @@ export function ChallengeProvider({ children }: { children: ReactNode }) {
     }
 
     try {
-      const rivalPubkey = draft.rivalPubkey || normalizePubkey(draft.rivalInput, dedupeProfiles([...followingRivals, ...knownRivals]));
+      const rivalPubkey = isExplicitPubkeyInput(draft.rivalInput)
+        ? normalizePubkey(draft.rivalInput, [])
+        : draft.rivalPubkey || normalizePubkey(draft.rivalInput, dedupeProfiles([...followingRivals, ...knownRivals]));
+      if (rivalPubkey === session.pubkey) {
+        setChallengeError('No podés desafiarte a vos mismo. Revisá la pubkey o el alias del rival.');
+        return;
+      }
+
       const now = Date.now();
       const ndk = getNostrClient();
       const cachedProfile = await cacheDb.profiles.get(rivalPubkey);
