@@ -1,5 +1,5 @@
 import type * as Party from 'partykit/server';
-import { createInitialMatchState, simulateShotWithFrames, type MatchState } from '../shared/core-match-engine.ts';
+import { compactMatchState, createInitialMatchState, simulateShotWithFrames, type MatchState } from '../shared/core-match-engine.ts';
 import type { ActiveMatchSnapshot, MatchClientEvent, MatchServerEvent, MatchStatus } from '../shared/match-realtime.ts';
 import { getSql } from './neon.ts';
 
@@ -177,7 +177,7 @@ export default class MatchServer implements Party.Server {
     const matchId = decodePartyId(this.room.id);
     const stored = await this.room.storage.get<PersistedSnapshot>('snapshot');
     if (stored) {
-      this.snapshot = { ...stored, latestShotAnimation: null };
+      this.snapshot = { ...stored, state: compactMatchState(stored.state), latestShotAnimation: null };
       return;
     }
 
@@ -201,7 +201,7 @@ export default class MatchServer implements Party.Server {
       awayPubkey: match.away_pubkey,
       homeName: match.home_name,
       awayName: match.away_name,
-      state: JSON.parse(match.current_state) as MatchState,
+      state: compactMatchState(JSON.parse(match.current_state) as MatchState),
       latestShotAnimation: null,
       rematchRequestedBy: match.rematch_requested_by,
       rematchMatchId: match.rematch_match_id,
@@ -258,7 +258,7 @@ export default class MatchServer implements Party.Server {
     await this.sql`
       update matches
       set status = ${this.snapshot.status},
-          current_state = ${JSON.stringify(this.snapshot.state)}::jsonb,
+          current_state = ${JSON.stringify(compactMatchState(this.snapshot.state))}::jsonb,
           rematch_requested_by = ${this.snapshot.rematchRequestedBy || null},
           rematch_match_id = ${this.snapshot.rematchMatchId || null},
           rematch_rejected_by = ${this.snapshot.rematchRejectedBy || null},

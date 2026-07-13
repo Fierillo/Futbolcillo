@@ -86,7 +86,47 @@ type FoulStateLike<TPlayer extends Pick<PhysicsPlayer, 'team' | 'pos' | 'radius'
 };
 
 export function compactMatchState(state: MatchState): MatchState {
-  return JSON.parse(JSON.stringify(state)) as MatchState;
+  return {
+    players: state.players.map((player) => ({
+      pos: { x: player.pos.x, y: player.pos.y },
+      vel: { x: player.vel.x, y: player.vel.y },
+      radius: player.radius,
+      mass: player.mass,
+      team: player.team,
+      number: player.number,
+    })),
+    ball: {
+      pos: { x: state.ball.pos.x, y: state.ball.pos.y },
+      vel: { x: state.ball.vel.x, y: state.ball.vel.y },
+      radius: state.ball.radius,
+      mass: state.ball.mass,
+      trail: state.ball.trail.map((point) => ({ x: point.x, y: point.y })),
+    },
+    goals: state.goals.map((goal) => ({
+      x: goal.x,
+      y: goal.y,
+      width: goal.width,
+      height: goal.height,
+      team: goal.team,
+    })),
+    score: { home: state.score.home, away: state.score.away },
+    turn: state.turn,
+    bonusTurnTeam: state.bonusTurnTeam,
+    pendingBonusTurns: state.pendingBonusTurns,
+    phase: state.phase,
+    activeShotPlayer: state.activeShotPlayer,
+    activeShotTouchedBall: state.activeShotTouchedBall,
+    activeShotCommittedFoul: state.activeShotCommittedFoul,
+    winner: state.winner,
+    lastShot: state.lastShot
+      ? {
+          id: state.lastShot.id,
+          playerIndex: state.lastShot.playerIndex,
+          velX: state.lastShot.velX,
+          velY: state.lastShot.velY,
+        }
+      : null,
+  };
 }
 
 export function advanceTurnAfterShot<TState extends TurnStateLike>(state: TState) {
