@@ -90,7 +90,7 @@ function wireChild(name, child) {
 process.on('SIGINT', () => shutdown(0));
 process.on('SIGTERM', () => shutdown(0));
 
-wireChild('vercel dev', spawn('npx', ['vercel', 'dev', '--listen', `0.0.0.0:${port}`], {
+wireChild('vercel dev', spawn('pnpm', ['exec', 'vercel', 'dev', '--listen', `0.0.0.0:${port}`], {
   stdio: 'inherit',
   env: {
     ...process.env,
@@ -99,7 +99,7 @@ wireChild('vercel dev', spawn('npx', ['vercel', 'dev', '--listen', `0.0.0.0:${po
   },
 }));
 
-wireChild('partykit dev', spawn('npx', ['partykit', 'dev'], {
+wireChild('partykit dev', spawn('pnpm', ['exec', 'partykit', 'dev'], {
   stdio: 'inherit',
   env: {
     ...process.env,

@@ -1,0 +1,30 @@
+packages:
+  - '.'
+minimumReleaseAge: 4320
+minimumReleaseAgeStrict: true
+minimumReleaseAgeIgnoreMissingTime: false
+minimumReleaseAgeExclude:
+  - '@vercel/build-utils@14.0.1'
+  - '@vercel/error-utils@2.2.1'
+  - '@vercel/node@5.9.5'
+  - '@vercel/python-analysis@0.13.1'
+  - '@vercel/static-config@3.4.1'
+  - 'electron-to-chromium@1.5.400'
+  - 'node-releases@2.0.52'
+trustPolicy: no-downgrade
+trustLockfile: false
+trustPolicyIgnoreAfter: 525600
+trustPolicyExclude:
+  - '@vercel/build-utils@14.0.1'
+  - '@vercel/error-utils@2.2.1'
+  - '@vercel/node@5.9.5'
+  - '@vercel/python-analysis@0.13.1'
+  - '@vercel/static-config@3.4.1'
+  - 'semver@6.3.1'
+  - 'undici-types@6.21.0'
+  - 'undici@5.29.0'
+blockExoticSubdeps: true
+strictDepBuilds: true
+allowBuilds:
+  esbuild: true
+  workerd: true

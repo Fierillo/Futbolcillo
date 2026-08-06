@@ -52,5 +52,5 @@ function wireChild(name, child) {
 process.on('SIGINT', () => shutdown(0));
 process.on('SIGTERM', () => shutdown(0));
 
-wireChild('vercel dev', spawnCommand('npx', ['vercel', 'dev']));
-wireChild('partykit dev', spawnCommand('npx', ['partykit', 'dev']));
+wireChild('vercel dev', spawnCommand('pnpm', ['exec', 'vercel', 'dev']));
+wireChild('partykit dev', spawnCommand('pnpm', ['exec', 'partykit', 'dev']));

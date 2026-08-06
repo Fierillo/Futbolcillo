@@ -2,6 +2,10 @@
   "name": "react-vite-tailwind",
   "private": true,
   "version": "0.0.0",
+  "packageManager": "pnpm@11.20.0+sha512-mm8zCpW2ZEbqCI+vFSFAWooB8H/ecTVmVjf7VLUu0NnN+ZbCPhfN7Rvy6N1CSVYrFEmK4FoRLIvY0Bu0Wa/7g==",
+  "engines": {
+    "node": ">=22.14.0"
+  },
   "type": "module",
   "scripts": {
     "dev": "node scripts/dev-stack.mjs",
@@ -39,6 +43,7 @@
     "typescript": "5.9.3",
     "vite": "7.3.2",
     "vite-plugin-singlefile": "2.3.0",
+    "vercel": "58.4.4",
     "vitest": "^4.1.9"
   }
 }
