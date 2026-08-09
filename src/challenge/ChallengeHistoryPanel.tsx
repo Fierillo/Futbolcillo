@@ -4,6 +4,7 @@ import { useChallengeStore } from './store';
 import { useMatchStore } from '../match/store';
 import { useNostrSession } from '../nostr/session-store';
 import type { CachedChallenge, ChallengeFilter } from './types';
+import { buildChallengeUrl } from './url';
 
 interface Props {
   onAction?: () => void;
@@ -112,12 +113,15 @@ export function ChallengeHistoryPanel({ onAction }: Props) {
     return 'No hay elementos para este filtro.';
   }, [selectedFilter]);
 
-  const copyChallengeId = async (challengeId: string) => {
+  const copyChallengeUrl = async (challenge: CachedChallenge) => {
     try {
-      await navigator.clipboard.writeText(challengeId);
-      setCopiedChallengeId(challengeId);
+      const ownerPubkey = challenge.sourceOwnerPubkey
+        || (challenge.direction === 'outgoing' ? challenge.ownerPubkey : challenge.rivalPubkey);
+      const challengeUrl = buildChallengeUrl(challenge.id, challenge.accessToken, ownerPubkey);
+      await navigator.clipboard.writeText(challengeUrl);
+      setCopiedChallengeId(challenge.id);
       window.setTimeout(() => {
-        setCopiedChallengeId((current) => (current === challengeId ? null : current));
+        setCopiedChallengeId((current) => (current === challenge.id ? null : current));
       }, 1400);
     } catch {
       // ignore clipboard failures silently
@@ -241,7 +245,8 @@ export function ChallengeHistoryPanel({ onAction }: Props) {
                   <div className="flex w-full flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                     <button
                       type="button"
-                      onClick={() => void copyChallengeId(challenge.id)}
+                      onClick={() => void copyChallengeUrl(challenge)}
+                      title="Copiar enlace completo del desafío"
                       className={`group inline-flex items-center justify-center gap-2 self-center rounded-lg border px-3 py-1.5 text-xs font-mono font-bold tracking-[0.16em] transition-all sm:self-auto ${copiedChallengeId === challenge.id ? 'scale-[1.02] border-emerald-500/60 bg-emerald-950/40 text-emerald-300' : 'border-stone-700 bg-stone-950/60 text-amber-300 hover:border-amber-500/40 hover:text-amber-200'}`}
                     >
                       {copiedChallengeId === challenge.id ? <Check size={13} /> : <Copy size={13} className="transition-transform group-hover:scale-110" />}
