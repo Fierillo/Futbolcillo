@@ -54,6 +54,7 @@ export interface GameState {
   message: string;
   messageTimer: number;
   particles: Particle[];
+  impactWaves: ImpactWave[];
   cameraShake: number;
 }
 
@@ -64,6 +65,15 @@ export interface Particle {
   maxLife: number;
   color: string;
   size: number;
+}
+
+export interface ImpactWave {
+  pos: Vec2;
+  radius: number;
+  growth: number;
+  life: number;
+  color: string;
+  lineWidth: number;
 }
 
 export {

@@ -2,7 +2,7 @@ export const FIELD_WIDTH = 1000;
 export const FIELD_HEIGHT = 600;
 export const PLAYER_RADIUS = 22;
 export const BALL_RADIUS = 14;
-export const GOAL_WIDTH = 20;
+export const GOAL_WIDTH = 48;
 export const GOAL_HEIGHT = 160;
 export const MAX_SHOOT_POWER = 18;
 export const FRICTION = 0.985;
@@ -45,11 +45,54 @@ export interface ShotFrame {
   ball: PhysicsVec2;
 }
 
+export type BallHitLevel = 1 | 2 | 3 | 4;
+
+export interface BallHitEvent {
+  frame: number;
+  level: BallHitLevel;
+}
+
+export type ImpactKind = 'disc-ball' | 'disc-disc' | 'ball-wall';
+
+export interface ImpactEvent {
+  frame: number;
+  level: BallHitLevel;
+  kind: ImpactKind;
+  playerIndices: number[];
+}
+
 export interface ShotOutcome {
+  goal: 'home' | 'away' | null;
   foul: {
     byTeam: 'home' | 'away';
     victimTeam: 'home' | 'away';
   } | null;
+  /**
+   * Animation frame indices where the ball impacts something (disc or wall).
+   * May contain the same frame more than once if multiple impacts happen together.
+   * Playback should key by event index, not by frame value.
+   */
+  ballHitFrames: number[];
+  /** Ball impacts with their physical intensity quantized into four audio levels. */
+  ballHits: BallHitEvent[];
+  /** All physical impacts used by the client for synchronized visual feedback. */
+  impacts: ImpactEvent[];
+  /** Frame index where the foul was first committed, if any. */
+  foulFrame: number | null;
+  /** Frame index where a goal was scored, if any. */
+  goalFrame: number | null;
+}
+
+export function createEmptyShotOutcome(): ShotOutcome {
+  return {
+    goal: null,
+    foul: null,
+    ballHitFrames: [],
+    ballHits: [],
+    impacts: [],
+    foulFrame: null,
+    goalFrame: null,
+  };
 }
 
 export interface ShotAnimation {
@@ -103,10 +146,10 @@ export function compactMatchState(state: MatchState): MatchState {
       trail: state.ball.trail.map((point) => ({ x: point.x, y: point.y })),
     },
     goals: state.goals.map((goal) => ({
-      x: goal.x,
-      y: goal.y,
-      width: goal.width,
-      height: goal.height,
+      x: goal.x + goal.width / 2 < FIELD_WIDTH / 2 ? -GOAL_WIDTH : FIELD_WIDTH,
+      y: FIELD_HEIGHT / 2 - GOAL_HEIGHT / 2,
+      width: GOAL_WIDTH,
+      height: GOAL_HEIGHT,
       team: goal.team,
     })),
     score: { home: state.score.home, away: state.score.away },
@@ -147,23 +190,27 @@ export function detectAndApplyShotFoul<TPlayer extends Pick<PhysicsPlayer, 'team
   state: FoulStateLike<TPlayer>,
   firstIndex: number,
   secondIndex: number,
+  involvedPlayers = new Set([state.activeShotPlayer]),
 ) {
   if (
     state.phase !== 'shooting'
     || state.activeShotPlayer === null
     || state.activeShotTouchedBall
     || state.activeShotCommittedFoul
-    || (state.activeShotPlayer !== firstIndex && state.activeShotPlayer !== secondIndex)
   ) {
     return null;
   }
 
   const first = state.players[firstIndex];
   const second = state.players[secondIndex];
-  const shooter = state.activeShotPlayer === firstIndex ? first : second;
-  const other = shooter === first ? second : first;
+  const firstInvolved = involvedPlayers.has(firstIndex);
+  const secondInvolved = involvedPlayers.has(secondIndex);
+  if (firstInvolved === secondInvolved) return null;
 
-  if (shooter.team === other.team || !areCirclesTouching(shooter, other)) {
+  const other = firstInvolved ? second : first;
+  const shooterTeam = state.players[state.activeShotPlayer].team;
+
+  if (shooterTeam === other.team || !areCirclesTouching(first, second)) {
     return null;
   }
 
@@ -172,7 +219,7 @@ export function detectAndApplyShotFoul<TPlayer extends Pick<PhysicsPlayer, 'team
   state.pendingBonusTurns = 1;
 
   return {
-    byTeam: shooter.team,
+    byTeam: shooterTeam,
     victimTeam: other.team,
   } satisfies NonNullable<ShotOutcome['foul']>;
 }
@@ -209,8 +256,8 @@ export function createInitialMatchState(homePubkey: string, awayPubkey: string):
       trail: [],
     },
     goals: [
-      { x: 0, y: FIELD_HEIGHT / 2 - GOAL_HEIGHT / 2, width: GOAL_WIDTH, height: GOAL_HEIGHT, team: 'away' },
-      { x: FIELD_WIDTH - GOAL_WIDTH, y: FIELD_HEIGHT / 2 - GOAL_HEIGHT / 2, width: GOAL_WIDTH, height: GOAL_HEIGHT, team: 'home' },
+      { x: -GOAL_WIDTH, y: FIELD_HEIGHT / 2 - GOAL_HEIGHT / 2, width: GOAL_WIDTH, height: GOAL_HEIGHT, team: 'away' },
+      { x: FIELD_WIDTH, y: FIELD_HEIGHT / 2 - GOAL_HEIGHT / 2, width: GOAL_WIDTH, height: GOAL_HEIGHT, team: 'home' },
     ],
     score: { home: 0, away: 0 },
     turn: 'home',
@@ -237,10 +284,18 @@ function areCirclesTouching(
   return vec2Dist(a.pos, b.pos) <= a.radius + b.radius + tolerance;
 }
 
+export function classifyBallHitLevel(impactSpeed: number): BallHitLevel {
+  if (impactSpeed < 3) return 1;
+  if (impactSpeed < 7) return 2;
+  if (impactSpeed < 12) return 3;
+  return 4;
+}
+
+/** @returns relative normal speed when an impulse was applied. */
 function resolveCircleCollision(
   a: { pos: PhysicsVec2; vel: PhysicsVec2; radius: number; mass: number },
   b: { pos: PhysicsVec2; vel: PhysicsVec2; radius: number; mass: number },
-) {
+): number | null {
   const dx = b.pos.x - a.pos.x;
   const dy = b.pos.y - a.pos.y;
   const distance = Math.sqrt(dx * dx + dy * dy);
@@ -261,7 +316,7 @@ function resolveCircleCollision(
     const rvy = b.vel.y - a.vel.y;
     const velAlongNormal = rvx * nx + rvy * ny;
 
-    if (velAlongNormal > 0) return;
+    if (velAlongNormal >= 0) return null;
 
     const restitution = 0.7;
     const impulse = -(1 + restitution) * velAlongNormal / totalMass;
@@ -270,7 +325,107 @@ function resolveCircleCollision(
     a.vel.y -= impulse * b.mass * ny;
     b.vel.x += impulse * a.mass * nx;
     b.vel.y += impulse * a.mass * ny;
+    return -velAlongNormal;
   }
+
+  return null;
+}
+
+function resolveSideAndGoalWalls(
+  body: { pos: PhysicsVec2; vel: PhysicsVec2; radius: number },
+  previousPos: PhysicsVec2,
+  goals: PhysicsGoal[],
+  restitution: number,
+  allowGoalEntry = true,
+) {
+  let xImpactSpeed = 0;
+  let yImpactSpeed = 0;
+  const exteriorGoal = allowGoalEntry
+    ? goals.find((goal) => {
+      const crossedGoalLine = goal.x < 0
+        ? body.pos.x < body.radius
+        : body.pos.x > FIELD_WIDTH - body.radius;
+      const fitsThroughMouth = body.pos.y - body.radius >= goal.y
+        && body.pos.y + body.radius <= goal.y + goal.height;
+      const centerInsideTunnel = (goal.x < 0 ? body.pos.x < 0 : body.pos.x > FIELD_WIDTH)
+        && body.pos.y >= goal.y
+        && body.pos.y <= goal.y + goal.height;
+      const wasInsideTunnel = goal.x < 0 ? previousPos.x < 0 : previousPos.x > FIELD_WIDTH;
+      return crossedGoalLine && (fitsThroughMouth || (centerInsideTunnel && wasInsideTunnel));
+    })
+    : undefined;
+
+  if (exteriorGoal) {
+    if (body.pos.y - body.radius < exteriorGoal.y) {
+      yImpactSpeed = Math.max(yImpactSpeed, Math.max(0, -body.vel.y));
+      body.pos.y = exteriorGoal.y + body.radius;
+      body.vel.y = Math.abs(body.vel.y) * restitution;
+    }
+    if (body.pos.y + body.radius > exteriorGoal.y + exteriorGoal.height) {
+      yImpactSpeed = Math.max(yImpactSpeed, Math.max(0, body.vel.y));
+      body.pos.y = exteriorGoal.y + exteriorGoal.height - body.radius;
+      body.vel.y = -Math.abs(body.vel.y) * restitution;
+    }
+
+    if (exteriorGoal.x < 0 && body.pos.x - body.radius < exteriorGoal.x) {
+      xImpactSpeed = Math.max(xImpactSpeed, Math.max(0, -body.vel.x));
+      body.pos.x = exteriorGoal.x + body.radius;
+      body.vel.x = Math.abs(body.vel.x) * restitution;
+    }
+    if (exteriorGoal.x >= FIELD_WIDTH && body.pos.x + body.radius > exteriorGoal.x + exteriorGoal.width) {
+      xImpactSpeed = Math.max(xImpactSpeed, Math.max(0, body.vel.x));
+      body.pos.x = exteriorGoal.x + exteriorGoal.width - body.radius;
+      body.vel.x = -Math.abs(body.vel.x) * restitution;
+    }
+  } else {
+    const crossedSide = body.pos.x - body.radius < 0 || body.pos.x + body.radius > FIELD_WIDTH;
+    const entranceGoal = allowGoalEntry && crossedSide
+      ? goals.find((goal) => goal.x < 0 ? body.pos.x < body.radius : body.pos.x > FIELD_WIDTH - body.radius)
+      : undefined;
+    const postY = entranceGoal
+      ? Math.abs(body.pos.y - entranceGoal.y) < Math.abs(body.pos.y - entranceGoal.y - entranceGoal.height)
+        ? entranceGoal.y
+        : entranceGoal.y + entranceGoal.height
+      : null;
+    if (entranceGoal && postY !== null) {
+      const goalLineX = entranceGoal.x < 0 ? 0 : FIELD_WIDTH;
+      const dx = body.pos.x - goalLineX;
+      const dy = body.pos.y - postY;
+      const distance = Math.hypot(dx, dy);
+      if (distance < body.radius && distance > 0) {
+        const previousDx = previousPos.x - goalLineX;
+        const previousDy = previousPos.y - postY;
+        const previousDistance = Math.hypot(previousDx, previousDy);
+        const nx = previousDistance > 0 ? previousDx / previousDistance : dx / distance;
+        const ny = previousDistance > 0 ? previousDy / previousDistance : dy / distance;
+        const overlap = body.radius - distance;
+        body.pos.x += nx * overlap;
+        body.pos.y += ny * overlap;
+        const velocityAlongNormal = body.vel.x * nx + body.vel.y * ny;
+        if (velocityAlongNormal < 0) {
+          const impactSpeed = -velocityAlongNormal;
+          body.vel.x -= (1 + restitution) * velocityAlongNormal * nx;
+          body.vel.y -= (1 + restitution) * velocityAlongNormal * ny;
+          xImpactSpeed = impactSpeed * Math.abs(nx);
+          yImpactSpeed = impactSpeed * Math.abs(ny);
+        }
+        return { xImpactSpeed, yImpactSpeed };
+      }
+    }
+
+    if (body.pos.x - body.radius < 0) {
+      xImpactSpeed = Math.max(0, -body.vel.x);
+      body.pos.x = body.radius;
+      body.vel.x = Math.abs(body.vel.x) * restitution;
+    }
+    if (body.pos.x + body.radius > FIELD_WIDTH) {
+      xImpactSpeed = Math.max(0, body.vel.x);
+      body.pos.x = FIELD_WIDTH - body.radius;
+      body.vel.x = -Math.abs(body.vel.x) * restitution;
+    }
+  }
+
+  return { xImpactSpeed, yImpactSpeed };
 }
 
 function checkGoal(state: MatchState): 'home' | 'away' | null {
@@ -280,13 +435,13 @@ function checkGoal(state: MatchState): 'home' | 'away' | null {
 
   const ball = state.ball;
   for (const goal of state.goals) {
-    const inGoalY = ball.pos.y + ball.radius > goal.y && ball.pos.y - ball.radius < goal.y + goal.height;
+    const inGoalY = ball.pos.y - ball.radius >= goal.y && ball.pos.y + ball.radius <= goal.y + goal.height;
     if (!inGoalY) continue;
 
-    const touchedBackWall = goal.x <= 0
-      ? ball.pos.x - ball.radius <= goal.x
-      : ball.pos.x + ball.radius >= goal.x + goal.width;
-    if (!touchedBackWall) continue;
+    const fullyCrossedGoalLine = goal.x < 0
+      ? ball.pos.x + ball.radius <= 0
+      : ball.pos.x - ball.radius >= FIELD_WIDTH;
+    if (!fullyCrossedGoalLine) continue;
 
     if (goal.team === 'home') {
       return 'away';
@@ -441,7 +596,14 @@ export function normalizeGoalTeams(state: MatchState): MatchState {
   };
 }
 
-function resetPositions(state: MatchState) {
+/**
+ * Reset to kickoff shape after a goal.
+ * @param scoringTeam team that received the point (includes own goals)
+ *
+ * Restart turn goes to the team that conceded — same as a kickoff after a goal —
+ * not to the opposite of whoever took the shot (that breaks own goals).
+ */
+function resetPositions(state: MatchState, scoringTeam: 'home' | 'away') {
   state.ball.pos = { x: FIELD_WIDTH / 2, y: FIELD_HEIGHT / 2 };
   state.ball.vel = { x: 0, y: 0 };
   state.ball.trail = [];
@@ -476,7 +638,6 @@ function resetPositions(state: MatchState) {
   state.activeShotCommittedFoul = false;
   state.bonusTurnTeam = null;
   state.pendingBonusTurns = 0;
-  const scoringTeam = state.turn;
   state.turn = scoringTeam === 'home' ? 'away' : 'home';
 }
 
@@ -502,10 +663,11 @@ export function simulateShot(
   deepState.activeShotPlayer = playerIndex;
   deepState.activeShotTouchedBall = false;
   deepState.activeShotCommittedFoul = false;
-  const outcome: ShotOutcome = { foul: null };
+  const outcome = createEmptyShotOutcome();
+  const involvedPlayers = new Set([playerIndex]);
 
   for (let frame = 0; frame < maxFrames; frame += 1) {
-    const done = simulateStepWithOutcome(deepState, outcome);
+    const done = simulateStepWithOutcome(deepState, outcome, null, involvedPlayers);
     if (done) break;
   }
 
@@ -522,7 +684,7 @@ export function simulateShotWithFrames(
 ) {
   const initialState = compactMatchState(state);
   const workingState = compactMatchState(state);
-  const outcome: ShotOutcome = { foul: null };
+  const outcome = createEmptyShotOutcome();
   const frames: ShotFrame[] = [
     {
       players: workingState.players.map((p) => ({ x: p.pos.x, y: p.pos.y })),
@@ -554,9 +716,24 @@ export function simulateShotWithFrames(
   workingState.activeShotPlayer = playerIndex;
   workingState.activeShotTouchedBall = false;
   workingState.activeShotCommittedFoul = false;
+  const involvedPlayers = new Set([playerIndex]);
 
   for (let frame = 0; frame < maxFrames; frame += 1) {
-    const done = simulateStepWithOutcome(workingState, outcome);
+    const hadFoul = outcome.foul !== null;
+    const scoreBefore = { home: workingState.score.home, away: workingState.score.away };
+    const frameIndex = frames.length;
+
+    // Impacts (disc + wall) are recorded inside the step via impulse/bounce detection.
+    const done = simulateStepWithOutcome(workingState, outcome, frameIndex, involvedPlayers);
+
+    if (!hadFoul && outcome.foul) {
+      outcome.foulFrame = frameIndex;
+    }
+
+    if (workingState.score.home !== scoreBefore.home || workingState.score.away !== scoreBefore.away) {
+      outcome.goalFrame = frameIndex;
+    }
+
     frames.push({
       players: workingState.players.map((p) => ({ x: p.pos.x, y: p.pos.y })),
       ball: { x: workingState.ball.pos.x, y: workingState.ball.pos.y },
@@ -580,23 +757,47 @@ export function simulateShotWithFrames(
   };
 }
 
-function simulateStepWithOutcome(state: MatchState, outcome: ShotOutcome): boolean {
+/**
+ * Advance one physics step.
+ * @param impactFrame when set, records every ball impact (disc impulse or wall bounce)
+ *                    into outcome.ballHitFrames for SFX scheduling.
+ */
+function simulateStepWithOutcome(
+  state: MatchState,
+  outcome: ShotOutcome,
+  impactFrame: number | null,
+  involvedPlayers = new Set(state.activeShotPlayer === null ? [] : [state.activeShotPlayer]),
+): boolean {
   const activePlayerIndex = state.activeShotPlayer;
+  const recordVisualImpact = (impactSpeed: number, kind: ImpactKind, playerIndices: number[]) => {
+    if (impactFrame !== null) {
+      outcome.impacts.push({
+        frame: impactFrame,
+        level: classifyBallHitLevel(impactSpeed),
+        kind,
+        playerIndices,
+      });
+    }
+  };
+  const recordBallImpact = (impactSpeed: number, kind: 'disc-ball' | 'ball-wall', playerIndices: number[]) => {
+    if (impactFrame !== null) {
+      const level = classifyBallHitLevel(impactSpeed);
+      outcome.ballHitFrames.push(impactFrame);
+      outcome.ballHits.push({
+        frame: impactFrame,
+        level,
+      });
+      outcome.impacts.push({ frame: impactFrame, level, kind, playerIndices });
+    }
+  };
 
   for (const player of state.players) {
+    const previousPos = { x: player.pos.x, y: player.pos.y };
     player.pos.x += player.vel.x * MOVEMENT_SCALE;
     player.pos.y += player.vel.y * MOVEMENT_SCALE;
     player.vel.x *= FRICTION;
     player.vel.y *= FRICTION;
 
-    if (player.pos.x - player.radius < 0) {
-      player.pos.x = player.radius;
-      player.vel.x *= -0.8;
-    }
-    if (player.pos.x + player.radius > FIELD_WIDTH) {
-      player.pos.x = FIELD_WIDTH - player.radius;
-      player.vel.x *= -0.8;
-    }
     if (player.pos.y - player.radius < 0) {
       player.pos.y = player.radius;
       player.vel.y *= -0.8;
@@ -605,8 +806,11 @@ function simulateStepWithOutcome(state: MatchState, outcome: ShotOutcome): boole
       player.pos.y = FIELD_HEIGHT - player.radius;
       player.vel.y *= -0.8;
     }
+
+    resolveSideAndGoalWalls(player, previousPos, state.goals, 0.8);
   }
 
+  const previousBallPos = { x: state.ball.pos.x, y: state.ball.pos.y };
   state.ball.pos.x += state.ball.vel.x * MOVEMENT_SCALE;
   state.ball.pos.y += state.ball.vel.y * MOVEMENT_SCALE;
   state.ball.vel.x *= FRICTION;
@@ -615,57 +819,70 @@ function simulateStepWithOutcome(state: MatchState, outcome: ShotOutcome): boole
   state.ball.trail.push({ x: state.ball.pos.x, y: state.ball.pos.y });
   if (state.ball.trail.length > 12) state.ball.trail.shift();
 
+  // Ball wall bounces — each real bounce is an impact (SFX).
   if (state.ball.pos.y - state.ball.radius < 0) {
+    const impactSpeed = Math.max(0, -state.ball.vel.y);
     state.ball.pos.y = state.ball.radius;
     state.ball.vel.y *= -0.9;
+    if (impactSpeed > 0) recordBallImpact(impactSpeed, 'ball-wall', []);
   }
   if (state.ball.pos.y + state.ball.radius > FIELD_HEIGHT) {
+    const impactSpeed = Math.max(0, state.ball.vel.y);
     state.ball.pos.y = FIELD_HEIGHT - state.ball.radius;
     state.ball.vel.y *= -0.9;
+    if (impactSpeed > 0) recordBallImpact(impactSpeed, 'ball-wall', []);
   }
 
-  const ballInGoalLane = !state.activeShotCommittedFoul
-    && state.goals.some((goal) => state.ball.pos.y > goal.y && state.ball.pos.y < goal.y + goal.height);
-  if (!ballInGoalLane) {
-    if (state.ball.pos.x - state.ball.radius < 0) {
-      state.ball.pos.x = state.ball.radius;
-      state.ball.vel.x *= -0.9;
-    }
-    if (state.ball.pos.x + state.ball.radius > FIELD_WIDTH) {
-      state.ball.pos.x = FIELD_WIDTH - state.ball.radius;
-      state.ball.vel.x *= -0.9;
-    }
-  }
+  const goalWallImpact = resolveSideAndGoalWalls(
+    state.ball,
+    previousBallPos,
+    state.goals,
+    0.9,
+    !state.activeShotCommittedFoul,
+  );
+  const goalWallImpactSpeed = Math.max(goalWallImpact.xImpactSpeed, goalWallImpact.yImpactSpeed);
+  if (goalWallImpactSpeed > 0) recordBallImpact(goalWallImpactSpeed, 'ball-wall', []);
 
   for (let i = 0; i < state.players.length; i += 1) {
     for (let j = i + 1; j < state.players.length; j += 1) {
-      const foul = detectAndApplyShotFoul(state, i, j);
+      const foul = detectAndApplyShotFoul(state, i, j, involvedPlayers);
       if (foul) {
         outcome.foul = foul;
       }
 
-      resolveCircleCollision(state.players[i], state.players[j]);
+      const impactSpeed = resolveCircleCollision(state.players[i], state.players[j]);
+      if (impactSpeed !== null) {
+        if (!foul && (involvedPlayers.has(i) || involvedPlayers.has(j))) {
+          involvedPlayers.add(i);
+          involvedPlayers.add(j);
+        }
+        recordVisualImpact(impactSpeed, 'disc-disc', [i, j]);
+      }
     }
   }
 
+  // Disc ↔ ball: record every real impulse (first hit, rebounds, multi-disc chains).
   for (let i = 0; i < state.players.length; i += 1) {
     const beforeTouching = areCirclesTouching(state.players[i], state.ball);
-    resolveCircleCollision(state.players[i], state.ball);
+    const impactSpeed = resolveCircleCollision(state.players[i], state.ball);
     const afterTouching = areCirclesTouching(state.players[i], state.ball);
 
-    if ((beforeTouching || afterTouching) && activePlayerIndex !== null && i === activePlayerIndex) {
+    if (impactSpeed !== null) {
+      recordBallImpact(impactSpeed, 'disc-ball', [i]);
+    }
+
+    if ((beforeTouching || afterTouching) && activePlayerIndex !== null && involvedPlayers.has(i)) {
       state.activeShotTouchedBall = true;
     }
   }
 
-  const scored = checkGoal(state);
+  const scored = outcome.goal === null ? checkGoal(state) : null;
   if (scored) {
+    outcome.goal = scored;
     state.score[scored] += 1;
     if (state.score[scored] >= WIN_SCORE) {
       state.winner = scored;
     }
-    resetPositions(state);
-    return true;
   }
 
   const movingPlayers = state.players.some((player) => Math.abs(player.vel.x) > STOP_THRESHOLD || Math.abs(player.vel.y) > STOP_THRESHOLD);
@@ -681,6 +898,11 @@ function simulateStepWithOutcome(state: MatchState, outcome: ShotOutcome): boole
   state.ball.vel.x = 0;
   state.ball.vel.y = 0;
 
+  if (outcome.goal) {
+    resetPositions(state, outcome.goal);
+    return true;
+  }
+
   if (state.phase === 'shooting') {
     advanceTurnAfterShot(state);
   }
@@ -694,5 +916,5 @@ function simulateStepWithOutcome(state: MatchState, outcome: ShotOutcome): boole
 
 export function simulateStep(state: MatchState): boolean {
   recoverInvalidBallState(state);
-  return simulateStepWithOutcome(state, { foul: null });
+  return simulateStepWithOutcome(state, createEmptyShotOutcome(), null);
 }

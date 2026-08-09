@@ -1,12 +1,13 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Goal, LoaderCircle, Swords, Trophy, Info, X, Volume2, VolumeX } from 'lucide-react';
 import { useChallengeStore } from './challenge/store';
-import TejoCanvas from './game/TejoCanvas';
+import TejoCanvas, { FIELD_VIEW_WIDTH } from './game/TejoCanvas';
 import { preparePhaseOneInfrastructure, usePhaseOneBoot } from './app/use-phase-one-boot';
-import { simulateShotWithFrames, type ShotAnimation } from './game/physics';
-import { GameState, FIELD_WIDTH, FIELD_HEIGHT } from './game/types';
+import { simulateShotWithFrames, type ImpactEvent, type ShotAnimation } from './game/physics';
+import { GameState, FIELD_HEIGHT } from './game/types';
 import { chooseTrainingAiShot } from './game/training-ai';
 import {
+  advanceImpactEffects,
   advanceVisualEffects,
   clearPointerSelection,
   consumeShotInput,
@@ -16,10 +17,13 @@ import {
   handlePointerDown,
   handlePointerMove,
   hasActiveVisualEffects,
+  spawnImpactEffect,
   spawnParticles,
   syncMatchStateToGameState,
   toMatchState,
 } from './game/local-game';
+import { detectBallImpactFrames, impactFramesToSchedule } from './game/ball-impact-sfx';
+import { playSfx, prepareAudio, scheduleBallHits, setMuted as setAudioMuted, unlockAudio } from './game/sounds';
 import { NostrGatewayModal } from './nostr/NostrGatewayModal';
 import { useNostrSession } from './nostr/session-store';
 import { getNostrClient } from './nostr/client';
@@ -339,10 +343,10 @@ export default function App() {
       const isPortrait = window.innerWidth < 640 && window.innerHeight > window.innerWidth;
       setIsMobilePortrait(isPortrait);
 
-      // Scale is always based on fitting FIELD_WIDTH x FIELD_HEIGHT into the container
-      // The rotation is handled by CSS transform, so visual dimensions are always FIELD_WIDTH * scale x FIELD_HEIGHT * scale
-      const scaleX = containerWidth / FIELD_WIDTH;
-      const scaleY = containerHeight / FIELD_HEIGHT;
+      const visualWidth = isPortrait ? FIELD_HEIGHT : FIELD_VIEW_WIDTH;
+      const visualHeight = isPortrait ? FIELD_VIEW_WIDTH : FIELD_HEIGHT;
+      const scaleX = containerWidth / visualWidth;
+      const scaleY = containerHeight / visualHeight;
       setScale(Math.min(scaleX, scaleY, 1));
     };
     updateScale();
@@ -372,6 +376,21 @@ export default function App() {
   const SHOT_ANIMATION_MIN_MS = 700;
   const SHOT_ANIMATION_MAX_MS = 2520;
   const SHOT_ANIMATION_FRAME_MS = 16;
+
+  useEffect(() => {
+    setAudioMuted(muted);
+  }, [muted]);
+
+  // Unlock audio on first user gesture anywhere (browsers block autoplay).
+  useEffect(() => {
+    const unlock = () => unlockAudio();
+    window.addEventListener('pointerdown', unlock, { passive: true });
+    window.addEventListener('keydown', unlock);
+    return () => {
+      window.removeEventListener('pointerdown', unlock);
+      window.removeEventListener('keydown', unlock);
+    };
+  }, []);
 
   useEffect(() => {
     if (isShotAnimating || !hasActiveVisualEffects(gameState)) {
@@ -418,30 +437,101 @@ export default function App() {
       frames: anim.frames?.length || 0,
     });
 
-    shotAnimationStartRef.current = performance.now();
-
     const goalScored = anim.finalState.score.home !== anim.initialState.score.home
       || anim.finalState.score.away !== anim.initialState.score.away;
     const visibleFrameCount = goalScored && anim.frames.length > 1
       ? anim.frames.length - 1
       : anim.frames.length;
-    const animationDurationMs = Math.max(
+    const physicsDurationMs = Math.max(
       SHOT_ANIMATION_MIN_MS,
       Math.min(SHOT_ANIMATION_MAX_MS, Math.max(1, visibleFrameCount - 1) * SHOT_ANIMATION_FRAME_MS)
     );
+    const totalDurationMs = physicsDurationMs;
+    const foulFrame = anim.outcome.foulFrame ?? null;
+    const goalFrame = anim.outcome.goalFrame ?? null;
+    let foulSfxPlayed = false;
+    let outcomeFxApplied = false;
+    let cancelled = false;
+    let stopScheduledHits: (() => void) | null = null;
+    const maxFrame = Math.max(visibleFrameCount - 1, 1);
+
+    // Detect impacts from the actual animation poses (first disc contact + walls).
+    // This matches what the player sees, including the first kick.
+    const visibleFrames = anim.frames.slice(0, visibleFrameCount);
+    const detectedImpactFrames = detectBallImpactFrames(visibleFrames);
+    const impactEvents = Array.isArray(anim.outcome.ballHits) && anim.outcome.ballHits.length > 0
+      ? anim.outcome.ballHits.filter((impact) => impact.frame < visibleFrameCount)
+      : detectedImpactFrames.map((frame) => ({ frame, level: 2 as const }));
+    const visualImpactEvents = Array.isArray(anim.outcome.impacts) && anim.outcome.impacts.length > 0
+      ? anim.outcome.impacts.filter((impact) => impact.frame < visibleFrameCount)
+      : impactEvents.map((impact) => ({
+          ...impact,
+          kind: 'ball-wall' as const,
+          playerIndices: [],
+        }));
+    let nextVisualImpactIndex = 0;
+    const impactFrames = impactEvents.map((impact) => impact.frame);
+    const impactAtMs = impactFramesToSchedule(impactFrames, visibleFrameCount, physicsDurationMs);
+
+    console.info('[sfx] ball-impact-frames', impactFrames.slice(0, 12), 'atMs', impactAtMs.slice(0, 12));
 
     const renderFrame = (time: number) => {
-      const progress = Math.min(1, (time - shotAnimationStartRef.current) / animationDurationMs);
-      const frameIndex = Math.min(visibleFrameCount - 1, Math.floor(progress * Math.max(visibleFrameCount - 1, 0)));
+      if (cancelled) return;
+      const elapsed = time - shotAnimationStartRef.current;
+      const physicsProgress = Math.min(1, elapsed / physicsDurationMs);
+      const frameIndex = Math.min(
+        visibleFrameCount - 1,
+        Math.floor(physicsProgress * Math.max(visibleFrameCount - 1, 0)),
+      );
+      const fullyDone = elapsed >= totalDurationMs;
       const frame = anim.frames[frameIndex];
       const finalState = anim.finalState;
-      const settledPlayers = progress < 1
+      const dueVisualImpacts: ImpactEvent[] = [];
+      while (
+        nextVisualImpactIndex < visualImpactEvents.length
+        && visualImpactEvents[nextVisualImpactIndex].frame <= frameIndex
+      ) {
+        dueVisualImpacts.push(visualImpactEvents[nextVisualImpactIndex]);
+        nextVisualImpactIndex += 1;
+      }
+
+      if (anim.outcome.foul && !foulSfxPlayed) {
+        const triggerAt = foulFrame == null ? maxFrame : Math.min(foulFrame, maxFrame);
+        const foulAtMs = (triggerAt / maxFrame) * physicsDurationMs;
+        if (elapsed >= foulAtMs || physicsProgress >= 1) {
+          foulSfxPlayed = true;
+          playSfx('whistle');
+        }
+      }
+
+      const goalReached = goalScored && goalFrame !== null && frameIndex >= Math.min(goalFrame, maxFrame);
+      const applyOutcomeFx = !outcomeFxApplied && (goalReached || (!goalScored && physicsProgress >= 1));
+      if (applyOutcomeFx) {
+        outcomeFxApplied = true;
+        if (goalScored) {
+          playSfx('goalCheer');
+        }
+      }
+
+      const settledPlayers = physicsProgress < 1
         ? (Array.isArray(frame?.players) ? frame.players : [])
         : finalState.players.map((player) => player.pos);
-      const settledBall = progress < 1 ? (frame?.ball ?? anim.initialState.ball.pos) : finalState.ball.pos;
+      const settledBall = physicsProgress < 1
+        ? (frame?.ball ?? anim.initialState.ball.pos)
+        : finalState.ball.pos;
 
       setGameState((prev) => {
         const next = { ...prev };
+        next.particles = prev.particles.map((particle) => ({
+          ...particle,
+          pos: { ...particle.pos },
+          vel: { ...particle.vel },
+        }));
+        next.impactWaves = prev.impactWaves.map((wave) => ({
+          ...wave,
+          pos: { ...wave.pos },
+        }));
+        advanceImpactEffects(next);
         next.players = createVisualPlayers(anim.initialState.players).map((player, index) => ({
           ...player,
           pos: {
@@ -455,32 +545,56 @@ export default function App() {
             x: settledBall.x,
             y: settledBall.y,
           },
-          trail: progress < 1 ? [] : [...finalState.ball.trail],
+          trail: physicsProgress < 1 ? [] : [...finalState.ball.trail],
         };
         next.goals = [...anim.initialState.goals];
-        next.score = progress < 1 ? { ...anim.initialState.score } : { ...finalState.score };
-        next.turn = progress < 1 ? anim.initialState.turn : finalState.turn;
-        next.phase = progress < 1 ? 'shooting' : finalState.phase;
-        next.winner = progress < 1 ? anim.initialState.winner : finalState.winner;
-        next.activeShotPlayer = progress < 1 ? anim.playerIndex : finalState.activeShotPlayer;
-        next.activeShotTouchedBall = progress < 1 ? false : finalState.activeShotTouchedBall;
-        next.activeShotCommittedFoul = progress < 1 ? false : finalState.activeShotCommittedFoul;
-        next.bonusTurnTeam = progress < 1 ? anim.initialState.bonusTurnTeam : finalState.bonusTurnTeam;
-        next.pendingBonusTurns = progress < 1 ? anim.initialState.pendingBonusTurns : finalState.pendingBonusTurns;
-        next.lastShot = progress < 1 ? anim.initialState.lastShot : finalState.lastShot;
+        next.score = physicsProgress < 1 && !outcomeFxApplied
+          ? { ...anim.initialState.score }
+          : { ...finalState.score };
+        next.turn = fullyDone || (!goalScored && physicsProgress >= 1)
+          ? finalState.turn
+          : anim.initialState.turn;
+        next.phase = fullyDone || physicsProgress >= 1
+            ? finalState.phase
+            : 'shooting';
+        next.winner = fullyDone || (!goalScored && physicsProgress >= 1)
+          ? finalState.winner
+          : anim.initialState.winner;
+        next.activeShotPlayer = physicsProgress < 1
+          ? anim.playerIndex
+          : finalState.activeShotPlayer;
+        next.activeShotTouchedBall = physicsProgress < 1
+          ? false
+          : finalState.activeShotTouchedBall;
+        next.activeShotCommittedFoul = physicsProgress < 1
+          ? false
+          : finalState.activeShotCommittedFoul;
+        next.bonusTurnTeam = fullyDone || (!goalScored && physicsProgress >= 1)
+          ? finalState.bonusTurnTeam
+          : anim.initialState.bonusTurnTeam;
+        next.pendingBonusTurns = fullyDone || (!goalScored && physicsProgress >= 1)
+          ? finalState.pendingBonusTurns
+          : anim.initialState.pendingBonusTurns;
+        next.lastShot = fullyDone || (!goalScored && physicsProgress >= 1)
+          ? finalState.lastShot
+          : anim.initialState.lastShot;
         next.lastShotAnimation = null;
         next.dragStart = null;
         next.dragCurrent = null;
         next.selectedPlayer = null;
 
-        if (progress >= 1) {
+        for (const impact of dueVisualImpacts) {
+          spawnImpactEffect(next, impact);
+        }
+
+        if (applyOutcomeFx) {
           if (goalScored) {
             const goalScorer = finalState.score.home !== anim.initialState.score.home ? 'home' : 'away';
             const scorerName = goalScorer === 'home' ? animationHomeAlias : animationAwayAlias;
             next.message = isTrainingMode && goalScorer === 'home'
               ? 'GOL DE LA MAQUINA'
               : `¡GOL DE ${scorerName.toUpperCase()}!`;
-            next.messageTimer = 120;
+            next.messageTimer = 180;
             next.cameraShake = 12;
             spawnParticles(next, next.ball.pos, 50, '#fbbf24', 8, 5);
             spawnParticles(next, next.ball.pos, 30, goalScorer === 'home' ? '#60a5fa' : '#f87171', 6, 4);
@@ -504,7 +618,7 @@ export default function App() {
         return next;
       });
 
-      if (progress >= 1) {
+      if (fullyDone) {
         console.info('[online-shot][app] animation-finished', {
           id: anim.id,
           finalTurn: finalState.turn,
@@ -518,8 +632,30 @@ export default function App() {
       animFrameRef.current = requestAnimationFrame(renderFrame);
     };
 
-    animFrameRef.current = requestAnimationFrame(renderFrame);
-    return () => cancelAnimationFrame(animFrameRef.current);
+    // Unlock HTMLAudio, wait two frames so the browser fully opens the media
+    // pipeline, then schedule every impact (including the first) the same way.
+    void prepareAudio().then((ready) => {
+      if (cancelled) return;
+
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          if (cancelled) return;
+          shotAnimationStartRef.current = performance.now();
+
+          const scheduled = scheduleBallHits(impactAtMs, impactEvents.map((impact) => impact.level));
+          stopScheduledHits = scheduled.stop;
+          console.info('[sfx] scheduled ball hits', scheduled.count, '/', impactAtMs.length, 'ready', ready);
+
+          animFrameRef.current = requestAnimationFrame(renderFrame);
+        });
+      });
+    });
+
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(animFrameRef.current);
+      stopScheduledHits?.();
+    };
   }, [activeChallenge, activeMatchMeta, activeShotAnimation, creatorAlias, finishActiveShotAnimation, isTrainingMode, joinerAlias, session.profile?.name]);
 
   useEffect(() => {
@@ -555,6 +691,8 @@ export default function App() {
   }, [trainingAiTurnKey]);
 
   const onMouseDown = useCallback((x: number, y: number) => {
+    // Start resume+decode inside the user gesture so the first impact can play.
+    void prepareAudio();
     if (isSubmittingShot || isShotAnimating) return;
     if (activeMatchId && matchState) {
       if (matchState.turn !== localTeam || matchState.phase !== 'aiming') return;
@@ -663,6 +801,7 @@ export default function App() {
       console.info('[online-shot][app] submitting-shot', shotCandidate);
       void submitShot(shotCandidate.playerTeam, shotCandidate.playerNumber, shotCandidate.velX, shotCandidate.velY);
     } else if (localShotCandidate) {
+      void prepareAudio();
       const { shotAnimation } = simulateShotWithFrames(
         toMatchState(current),
         localShotCandidate.playerIndex,
@@ -862,8 +1001,13 @@ export default function App() {
             )}
           </button>
           <button
-            onClick={() => setMuted(!muted)}
+            onClick={() => {
+              unlockAudio();
+              setMuted((prev) => !prev);
+            }}
             className={`rounded-lg bg-stone-800 hover:bg-stone-700 transition-colors ${isMobilePortrait ? 'p-1.5' : 'p-2'}`}
+            title={muted ? 'Activar sonido' : 'Silenciar'}
+            aria-label={muted ? 'Activar sonido' : 'Silenciar'}
           >
             {muted ? <VolumeX size={16} /> : <Volume2 size={16} />}
           </button>

@@ -1,4 +1,4 @@
-import type { MatchState, PhysicsBall, PhysicsPlayer } from './physics';
+import type { ImpactEvent, MatchState, PhysicsBall, PhysicsPlayer } from './physics';
 import { createInitialMatchState, MAX_SHOOT_POWER } from './physics';
 import type { GameState, Particle, Vec2 } from './types';
 
@@ -35,7 +35,7 @@ export function getShotPowerFromDragDistance(dragDistance: number) {
 }
 
 export function getMinimumShotDragDistance(playerRadius: number) {
-  return playerRadius;
+  return playerRadius * 0.5;
 }
 
 export function createVisualPlayers(players: PhysicsPlayer[]): GameState['players'] {
@@ -80,6 +80,7 @@ export function createInitialState(): GameState {
     message: '',
     messageTimer: 0,
     particles: [],
+    impactWaves: [],
     cameraShake: 0,
   };
 }
@@ -216,22 +217,79 @@ export function spawnParticles(state: GameState, pos: Vec2, count: number, color
   }
 }
 
-export function advanceVisualEffects(state: GameState) {
+export function spawnImpactEffect(state: GameState, impact: ImpactEvent) {
+  const playerPositions = impact.playerIndices
+    .map((index) => state.players[index]?.pos)
+    .filter((pos): pos is Vec2 => Boolean(pos));
+  const involvedPositions = impact.kind === 'disc-ball'
+    ? [...playerPositions, state.ball.pos]
+    : impact.kind === 'ball-wall'
+      ? [state.ball.pos]
+      : playerPositions;
+  if (involvedPositions.length === 0) return;
+
+  const contact = involvedPositions.reduce(
+    (sum, pos) => ({ x: sum.x + pos.x, y: sum.y + pos.y }),
+    { x: 0, y: 0 },
+  );
+  contact.x /= involvedPositions.length;
+  contact.y /= involvedPositions.length;
+
+  const countByLevel = [0, 4, 8, 14, 22];
+  const speedByLevel = [0, 0.6, 1.2, 2.1, 3.2];
+  const sizeByLevel = [0, 1.2, 1.8, 2.7, 3.8];
+  const colorByLevel = ['', '#dbeafe', '#fde68a', '#fbbf24', '#fb7185'];
+  const shakeByLevel = [0, 0, 0.8, 1.8, 3.2];
+  const level = impact.level;
+
+  spawnParticles(
+    state,
+    contact,
+    countByLevel[level],
+    colorByLevel[level],
+    speedByLevel[level],
+    sizeByLevel[level],
+  );
+  state.impactWaves.push({
+    pos: { ...contact },
+    radius: 5 + level * 2,
+    growth: 1.2 + level * 0.65,
+    life: 1,
+    color: colorByLevel[level],
+    lineWidth: 1 + level * 0.65,
+  });
+  state.cameraShake = Math.max(state.cameraShake, shakeByLevel[level]);
+}
+
+export function advanceImpactEffects(state: GameState) {
   for (let i = state.particles.length - 1; i >= 0; i -= 1) {
     const particle = state.particles[i];
     particle.pos.x += particle.vel.x;
     particle.pos.y += particle.vel.y;
     particle.vel.y += 0.05;
-    particle.life -= 0.015;
+    particle.life -= 0.04;
     if (particle.life <= 0) {
       state.particles.splice(i, 1);
     }
   }
 
-  if (state.cameraShake > 0) {
-    state.cameraShake *= 0.9;
-    if (state.cameraShake < 0.5) state.cameraShake = 0;
+  for (let i = state.impactWaves.length - 1; i >= 0; i -= 1) {
+    const wave = state.impactWaves[i];
+    wave.radius += wave.growth;
+    wave.life -= 0.07;
+    if (wave.life <= 0) {
+      state.impactWaves.splice(i, 1);
+    }
   }
+
+  if (state.cameraShake > 0) {
+    state.cameraShake *= 0.86;
+    if (state.cameraShake < 0.3) state.cameraShake = 0;
+  }
+}
+
+export function advanceVisualEffects(state: GameState) {
+  advanceImpactEffects(state);
 
   if (state.messageTimer > 0) {
     state.messageTimer -= 1;
@@ -243,7 +301,10 @@ export function advanceVisualEffects(state: GameState) {
 }
 
 export function hasActiveVisualEffects(state: GameState) {
-  return state.messageTimer > 0 || state.cameraShake > 0 || state.particles.length > 0;
+  return state.messageTimer > 0
+    || state.cameraShake > 0
+    || state.particles.length > 0
+    || state.impactWaves.length > 0;
 }
 
 export type { LocalShotCandidate, Particle };

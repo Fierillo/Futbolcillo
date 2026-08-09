@@ -31,7 +31,7 @@ Futbolcillo is a turn-based football game built with `React + TypeScript + Canva
 - [x] Explicit match termination flow
 - [x] Termination notice overlay with auto-dismiss
 - [x] Schema bootstrap and consolidated endpoints (10 functions)
-- [ ] Sound effects and richer match presentation
+- [x] Sound effects (ball hit, foul whistle, goal cheer) and richer match presentation
 - [ ] Nostr resilience across flaky relays
 - [x] Challenge status UX and cleanup flows
 - [x] Session UX and bunker QR connection flow improvements
@@ -59,22 +59,10 @@ Futbolcillo is a turn-based football game built with `React + TypeScript + Canva
 ### Install Dependencies
 
 ```bash
-npm install
-```
-
-o
-
-```bash
 pnpm install
 ```
 
 ### Run Frontend
-
-```bash
-npm run dev
-```
-
-o
 
 ```bash
 pnpm dev
@@ -83,7 +71,7 @@ pnpm dev
 ### Build
 
 ```bash
-npm run build
+pnpm build
 ```
 
 ## Nostr
