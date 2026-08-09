@@ -1,1 +1,1 @@
-export * from './core-match-engine.js';
+export * from '../../shared/core-match-engine.js';
