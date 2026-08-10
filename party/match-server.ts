@@ -1,4 +1,4 @@
-import type * as Party from 'partykit/server';
+import { routePartykitRequest, Server, type Connection, type ConnectionContext, type WSMessage } from 'partyserver';
 import { compactMatchState, createInitialMatchState, normalizeGoalTeams, recoverInvalidBallState, simulateShotWithFrames, swapMatchSides, type MatchState } from '../shared/core-match-engine.ts';
 import type { ActiveMatchSnapshot, MatchClientEvent, MatchServerEvent, MatchStatus } from '../shared/match-realtime.ts';
 import { getSql } from './neon.ts';
@@ -20,8 +20,14 @@ type MatchRow = {
 };
 
 type PersistedSnapshot = Omit<ActiveMatchSnapshot, 'latestShotAnimation' | 'nextChallengeId' | 'nextChallengeAccessToken'>;
+type MatchConnection = Connection<{ pubkey: string }>;
 
-function parseEvent(message: string | ArrayBuffer): MatchClientEvent | null {
+interface Env extends Cloudflare.Env {
+  MAIN: DurableObjectNamespace<MatchServer>;
+  NEON_URL?: string;
+}
+
+function parseEvent(message: WSMessage): MatchClientEvent | null {
   if (typeof message !== 'string') return null;
 
   try {
@@ -53,21 +59,19 @@ function toPersistedSnapshot(snapshot: ActiveMatchSnapshot): PersistedSnapshot {
   return persisted;
 }
 
-export default class MatchServer implements Party.Server {
-  readonly options = {
+export class MatchServer extends Server<Env> {
+  static options = {
     hibernate: true,
   };
 
   private snapshot: ActiveMatchSnapshot | null = null;
   private loadPromise: Promise<void> | null = null;
 
-  constructor(readonly room: Party.Room) {}
-
   async onStart() {
     await this.ensureLoaded();
   }
 
-  async onConnect(connection: Party.Connection, ctx: Party.ConnectionContext) {
+  async onConnect(connection: MatchConnection, ctx: ConnectionContext) {
     await this.ensureLoaded();
 
     const url = new URL(ctx.request.url);
@@ -76,17 +80,17 @@ export default class MatchServer implements Party.Server {
 
     if (!this.snapshot) {
       this.sendTo(connection, { type: 'match.error', message: 'No se pudo cargar la partida.' });
-      connection.close();
+      connection.close(1008, 'Match not available');
       return;
     }
 
     if (!accessToken || !pubkey) {
       this.sendTo(connection, { type: 'match.error', message: 'Falta accessToken o pubkey para abrir la partida.' });
-      connection.close();
+      connection.close(1008, 'Missing credentials');
       return;
     }
 
-    const rows = await this.sql`
+    const rows = await this.db`
       select c.access_token
       from matches m
       join challenges c on c.id = m.challenge_id
@@ -97,13 +101,13 @@ export default class MatchServer implements Party.Server {
     const expectedAccessToken = rows[0]?.access_token || '';
     if (expectedAccessToken !== accessToken) {
       this.sendTo(connection, { type: 'match.error', message: 'El access token de la partida no coincide.' });
-      connection.close();
+      connection.close(1008, 'Invalid access token');
       return;
     }
 
     if (!isPlayer(this.snapshot, pubkey)) {
       this.sendTo(connection, { type: 'match.error', message: 'Esta pubkey no pertenece a la partida.' });
-      connection.close();
+      connection.close(1008, 'Player not allowed');
       return;
     }
 
@@ -112,7 +116,7 @@ export default class MatchServer implements Party.Server {
     this.sendSnapshot(connection);
   }
 
-  async onMessage(message: string | ArrayBuffer, sender: Party.Connection) {
+  async onMessage(sender: MatchConnection, message: WSMessage) {
     await this.ensureLoaded();
 
     const event = parseEvent(message);
@@ -121,7 +125,7 @@ export default class MatchServer implements Party.Server {
       return;
     }
 
-    const actorPubkey = String(((sender.state as { pubkey?: string } | null) || {}).pubkey || '');
+    const actorPubkey = String(sender.state?.pubkey || '');
     if (!isPlayer(this.snapshot, actorPubkey)) {
       this.sendError(sender, 'No pertenecés a esta partida.');
       return;
@@ -148,7 +152,7 @@ export default class MatchServer implements Party.Server {
     }
   }
 
-  async onRequest(req: Party.Request) {
+  async onRequest(req: Request) {
     await this.ensureLoaded();
 
     if (req.method !== 'GET') {
@@ -161,8 +165,8 @@ export default class MatchServer implements Party.Server {
     });
   }
 
-  private get sql() {
-    return getSql(this.room.env);
+  private get db() {
+    return getSql(this.env);
   }
 
   private async ensureLoaded() {
@@ -176,7 +180,7 @@ export default class MatchServer implements Party.Server {
   private async normalizeSnapshotSides() {
     if (!this.snapshot) return;
 
-    const challengeRows = await this.sql`
+    const challengeRows = await this.db`
       select owner_pubkey, rival_pubkey
       from challenges
       where id = ${this.snapshot.challengeId}
@@ -202,19 +206,21 @@ export default class MatchServer implements Party.Server {
   }
 
   private async loadSnapshot() {
-    const matchId = decodePartyId(this.room.id);
-    const stored = await this.room.storage.get<PersistedSnapshot>('snapshot');
+    const matchId = decodePartyId(this.name);
+    const stored = await this.ctx.storage.get<PersistedSnapshot>('snapshot');
     if (stored) {
       this.snapshot = { ...stored, state: compactMatchState(stored.state), latestShotAnimation: null };
       await this.normalizeSnapshotSides();
-      this.snapshot.state = normalizeGoalTeams(this.snapshot.state);
-      if (recoverInvalidBallState(this.snapshot.state)) {
+      const snapshot = this.snapshot;
+      if (!snapshot) return;
+      snapshot.state = normalizeGoalTeams(snapshot.state);
+      if (recoverInvalidBallState(snapshot.state)) {
         await this.persistSnapshot();
       }
       return;
     }
 
-    const rows = await this.sql`
+    const rows = await this.db`
       select id, challenge_id, status, home_pubkey, away_pubkey, home_name, away_name,
              current_state::text, rematch_requested_by, rematch_match_id, rematch_rejected_by,
              terminated_by, updated_at::text
@@ -246,13 +252,15 @@ export default class MatchServer implements Party.Server {
     };
 
     await this.normalizeSnapshotSides();
-    this.snapshot.state = normalizeGoalTeams(this.snapshot.state);
+    const snapshot = this.snapshot;
+    if (!snapshot) return;
+    snapshot.state = normalizeGoalTeams(snapshot.state);
 
-    if (recoverInvalidBallState(this.snapshot.state)) {
+    if (recoverInvalidBallState(snapshot.state)) {
       await this.persistSnapshot();
     }
 
-    await this.room.storage.put('snapshot', toPersistedSnapshot(this.snapshot));
+    await this.ctx.storage.put('snapshot', toPersistedSnapshot(snapshot));
   }
 
   private buildSnapshot() {
@@ -271,14 +279,14 @@ export default class MatchServer implements Party.Server {
     return { ...this.snapshot };
   }
 
-  private sendSnapshot(connection: Party.Connection) {
+  private sendSnapshot(connection: MatchConnection) {
     this.sendTo(connection, {
       type: 'match.snapshot',
       match: { ...this.buildSnapshot(), latestShotAnimation: null },
     });
   }
 
-  private sendError(connection: Party.Connection, message: string) {
+  private sendError(connection: MatchConnection, message: string) {
     this.sendTo(connection, {
       type: 'match.error',
       message,
@@ -286,12 +294,12 @@ export default class MatchServer implements Party.Server {
     });
   }
 
-  private sendTo(connection: Party.Connection, event: MatchServerEvent) {
+  private sendTo(connection: MatchConnection, event: MatchServerEvent) {
     connection.send(JSON.stringify(event));
   }
 
-  private broadcast(event: MatchServerEvent) {
-    this.room.broadcast(JSON.stringify(event));
+  private broadcastEvent(event: MatchServerEvent) {
+    this.broadcast(JSON.stringify(event));
   }
 
   private async persistSnapshot(status = this.snapshot?.status) {
@@ -302,8 +310,8 @@ export default class MatchServer implements Party.Server {
       this.snapshot.status = status;
     }
 
-    await this.room.storage.put('snapshot', toPersistedSnapshot(this.snapshot));
-    await this.sql`
+    await this.ctx.storage.put('snapshot', toPersistedSnapshot(this.snapshot));
+    await this.db`
       update matches
       set status = ${this.snapshot.status},
           current_state = ${JSON.stringify(compactMatchState(this.snapshot.state))}::jsonb,
@@ -316,7 +324,7 @@ export default class MatchServer implements Party.Server {
     `;
   }
 
-  private async handleShot(sender: Party.Connection, actorPubkey: string, playerIndex: number, velX: number, velY: number) {
+  private async handleShot(sender: MatchConnection, actorPubkey: string, playerIndex: number, velX: number, velY: number) {
     if (!this.snapshot) return;
 
     if (this.snapshot.status !== 'active') {
@@ -348,7 +356,7 @@ export default class MatchServer implements Party.Server {
     this.snapshot.status = finalState.winner ? 'finished' : 'active';
     await this.persistSnapshot(this.snapshot.status);
 
-    this.broadcast({
+    this.broadcastEvent({
       type: 'shot.resolved',
       actingPubkey: actorPubkey,
       match: this.buildSnapshot(),
@@ -359,7 +367,7 @@ export default class MatchServer implements Party.Server {
     this.snapshot.latestShotAnimation = null;
   }
 
-  private async handleTerminate(sender: Party.Connection, actorPubkey: string, terminatedBy: string) {
+  private async handleTerminate(sender: MatchConnection, actorPubkey: string, terminatedBy: string) {
     if (!this.snapshot) return;
 
     if (actorPubkey !== terminatedBy || !isPlayer(this.snapshot, terminatedBy)) {
@@ -370,9 +378,9 @@ export default class MatchServer implements Party.Server {
     this.snapshot.status = 'terminated';
     this.snapshot.terminatedBy = terminatedBy;
     await this.persistSnapshot('terminated');
-    await this.sql`update challenges set state = ${'terminated'}, updated_at = now() where id = ${this.snapshot.challengeId}`;
+    await this.db`update challenges set state = ${'terminated'}, updated_at = now() where id = ${this.snapshot.challengeId}`;
 
-    this.broadcast({
+    this.broadcastEvent({
       type: 'control.resolved',
       action: 'terminate',
       actorPubkey: terminatedBy,
@@ -380,7 +388,7 @@ export default class MatchServer implements Party.Server {
     });
   }
 
-  private async handleRematchRequest(sender: Party.Connection, actorPubkey: string, requesterPubkey: string) {
+  private async handleRematchRequest(sender: MatchConnection, actorPubkey: string, requesterPubkey: string) {
     if (!this.snapshot) return;
 
     if (this.snapshot.status !== 'finished') {
@@ -407,7 +415,7 @@ export default class MatchServer implements Party.Server {
     this.snapshot.rematchRejectedBy = null;
     await this.persistSnapshot();
 
-    this.broadcast({
+    this.broadcastEvent({
       type: 'control.resolved',
       action: 'rematch-request',
       actorPubkey: requesterPubkey,
@@ -415,7 +423,7 @@ export default class MatchServer implements Party.Server {
     });
   }
 
-  private async handleRematchAccept(sender: Party.Connection, actorPubkey: string, accepterPubkey: string) {
+  private async handleRematchAccept(sender: MatchConnection, actorPubkey: string, accepterPubkey: string) {
     if (!this.snapshot) return;
 
     if (this.snapshot.status !== 'finished') {
@@ -439,7 +447,7 @@ export default class MatchServer implements Party.Server {
     }
 
     if (!this.snapshot.rematchMatchId) {
-      const challengeRows = await this.sql`
+      const challengeRows = await this.db`
         select owner_pubkey, rival_pubkey, mode, amount_sats
         from challenges
         where id = ${this.snapshot.challengeId}
@@ -465,7 +473,7 @@ export default class MatchServer implements Party.Server {
       if (this.snapshot.state.winner === 'home') winnerPubkey = this.snapshot.homePubkey;
       if (this.snapshot.state.winner === 'away') winnerPubkey = this.snapshot.awayPubkey;
 
-      await this.sql`
+      await this.db`
         insert into challenges (id, access_token, owner_pubkey, rival_pubkey, mode, state, amount_sats, expires_at)
         values (
           ${rematchChallengeId},
@@ -479,7 +487,7 @@ export default class MatchServer implements Party.Server {
         )
       `;
 
-      await this.sql`
+      await this.db`
         insert into matches (id, challenge_id, mode, status, home_pubkey, away_pubkey, home_name, away_name, current_state)
         values (
           ${rematchId},
@@ -494,7 +502,7 @@ export default class MatchServer implements Party.Server {
         )
       `;
 
-      await this.sql`
+      await this.db`
         update challenges
         set state = ${'finalized'},
             winner_pubkey = ${winnerPubkey},
@@ -512,7 +520,7 @@ export default class MatchServer implements Party.Server {
 
     await this.persistSnapshot();
 
-    this.broadcast({
+    this.broadcastEvent({
       type: 'control.resolved',
       action: 'rematch-accept',
       actorPubkey: accepterPubkey,
@@ -525,7 +533,7 @@ export default class MatchServer implements Party.Server {
     }
   }
 
-  private async handleRematchReject(sender: Party.Connection, actorPubkey: string, rejecterPubkey: string) {
+  private async handleRematchReject(sender: MatchConnection, actorPubkey: string, rejecterPubkey: string) {
     if (!this.snapshot) return;
 
     if (this.snapshot.status !== 'finished') {
@@ -552,7 +560,7 @@ export default class MatchServer implements Party.Server {
     this.snapshot.rematchRejectedBy = rejecterPubkey;
     await this.persistSnapshot();
 
-    this.broadcast({
+    this.broadcastEvent({
       type: 'control.resolved',
       action: 'rematch-reject',
       actorPubkey: rejecterPubkey,
@@ -560,3 +568,9 @@ export default class MatchServer implements Party.Server {
     });
   }
 }
+
+export default {
+  async fetch(request: Request, env: Env) {
+    return (await routePartykitRequest(request, env)) || new Response('Not found', { status: 404 });
+  },
+};

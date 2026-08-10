@@ -1,6 +1,7 @@
 import { networkInterfaces } from 'node:os';
 import { spawn } from 'node:child_process';
 import net from 'node:net';
+import { getWorkerDevEnv } from './worker-env.mjs';
 
 const children = [];
 let shuttingDown = false;
@@ -99,10 +100,10 @@ wireChild('vercel dev', spawn('pnpm', ['exec', 'vercel', 'dev', '--listen', `0.0
   },
 }));
 
-wireChild('partykit dev', spawn('pnpm', ['exec', 'partykit', 'dev'], {
+wireChild('wrangler dev', spawn('pnpm', ['exec', 'wrangler', 'dev', '--port', '1999'], {
   stdio: 'inherit',
   env: {
-    ...process.env,
+    ...getWorkerDevEnv(),
     VITE_PUBLIC_APP_URL: process.env.VITE_PUBLIC_APP_URL || publicUrl,
   },
 }));

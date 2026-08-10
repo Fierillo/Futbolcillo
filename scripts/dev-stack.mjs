@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { getWorkerDevEnv } from './worker-env.mjs';
 
 function spawnCommand(command, args, env = process.env) {
   return spawn(command, args, {
@@ -53,4 +54,4 @@ process.on('SIGINT', () => shutdown(0));
 process.on('SIGTERM', () => shutdown(0));
 
 wireChild('vercel dev', spawnCommand('pnpm', ['exec', 'vercel', 'dev']));
-wireChild('partykit dev', spawnCommand('pnpm', ['exec', 'partykit', 'dev']));
+wireChild('wrangler dev', spawnCommand('pnpm', ['exec', 'wrangler', 'dev', '--port', '1999'], getWorkerDevEnv()));

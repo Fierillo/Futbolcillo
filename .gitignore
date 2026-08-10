@@ -3,5 +3,7 @@ dist
 .DS_Store
 *.zip
 .env
+.dev.vars
 .vercel
 .partykit
+.wrangler
