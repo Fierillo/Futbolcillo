@@ -177,6 +177,14 @@ export function handlePointerMove(state: GameState, x: number, y: number) {
   state.dragCurrent = vec2(x, y);
 }
 
+export function handleDetachedPointerMove(state: GameState, pointerStart: Vec2, x: number, y: number) {
+  if (state.selectedPlayer === null || !state.dragStart) return;
+  state.dragCurrent = vec2(
+    state.dragStart.x + x - pointerStart.x,
+    state.dragStart.y + y - pointerStart.y,
+  );
+}
+
 export function consumeShotInput(state: GameState): LocalShotCandidate | null {
   if (state.selectedPlayer === null || !state.dragStart || !state.dragCurrent) {
     return null;

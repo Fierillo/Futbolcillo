@@ -5,9 +5,9 @@ import { getMinimumShotDragDistance, getShotPowerFromDragDistance } from './loca
 
 interface Props {
   gameState: GameState;
-  onMouseDown: (x: number, y: number) => void;
-  onMouseMove: (x: number, y: number) => void;
-  onMouseUp: () => void;
+  onMouseDown: (x: number, y: number, pointerType: string) => void;
+  onMouseMove: (x: number, y: number, pointerType: string) => void;
+  onMouseUp: (pointerType: string) => void;
   scale: number;
   isRotated?: boolean;
   isInteractionBlocked?: boolean;
@@ -260,11 +260,15 @@ export default function TejoCanvas({ gameState, onMouseDown, onMouseMove, onMous
 
       // Selection glow
       if (p.isSelected) {
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
-        ctx.lineWidth = 2;
+        ctx.save();
+        ctx.shadowColor = 'rgba(255, 255, 255, 0.85)';
+        ctx.shadowBlur = 10;
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
+        ctx.lineWidth = 3;
         ctx.beginPath();
-        ctx.arc(p.pos.x, p.pos.y, p.radius + 6, 0, Math.PI * 2);
+        ctx.arc(p.pos.x, p.pos.y, p.radius + 8, 0, Math.PI * 2);
         ctx.stroke();
+        ctx.restore();
       }
 
       // Cooldown indicator
@@ -277,7 +281,12 @@ export default function TejoCanvas({ gameState, onMouseDown, onMouseMove, onMous
     }
 
     // Shot guide
-    if (gameState.dragStart && gameState.dragCurrent && gameState.selectedPlayer !== null) {
+    if (
+      gameState.dragStart
+      && gameState.dragCurrent
+      && gameState.selectedPlayer !== null
+      && (gameState.dragStart.x !== gameState.dragCurrent.x || gameState.dragStart.y !== gameState.dragCurrent.y)
+    ) {
       const player = gameState.players[gameState.selectedPlayer];
       const dx = gameState.dragStart.x - gameState.dragCurrent.x;
       const dy = gameState.dragStart.y - gameState.dragCurrent.y;
@@ -412,9 +421,9 @@ export default function TejoCanvas({ gameState, onMouseDown, onMouseMove, onMous
 
     if (isRotated) {
       // Rotated 90° clockwise: logicalX = rawY, logicalY = FIELD_HEIGHT - rawX
-      onMouseDown(rawY - GOAL_WIDTH, FIELD_HEIGHT - rawX);
+      onMouseDown(rawY - GOAL_WIDTH, FIELD_HEIGHT - rawX, e.pointerType);
     } else {
-      onMouseDown(rawX - GOAL_WIDTH, rawY);
+      onMouseDown(rawX - GOAL_WIDTH, rawY, e.pointerType);
     }
   };
 
@@ -425,9 +434,9 @@ export default function TejoCanvas({ gameState, onMouseDown, onMouseMove, onMous
     const rawY = (e.clientY - rect.top) / scale;
 
     if (isRotated) {
-      onMouseMove(rawY - GOAL_WIDTH, FIELD_HEIGHT - rawX);
+      onMouseMove(rawY - GOAL_WIDTH, FIELD_HEIGHT - rawX, e.pointerType);
     } else {
-      onMouseMove(rawX - GOAL_WIDTH, rawY);
+      onMouseMove(rawX - GOAL_WIDTH, rawY, e.pointerType);
     }
   };
 
@@ -435,7 +444,7 @@ export default function TejoCanvas({ gameState, onMouseDown, onMouseMove, onMous
     if (canvasRef.current?.hasPointerCapture(e.pointerId)) {
       canvasRef.current.releasePointerCapture(e.pointerId);
     }
-    onMouseUp();
+    onMouseUp(e.pointerType);
   };
 
   const handlePointerCancel = (e: React.PointerEvent) => {

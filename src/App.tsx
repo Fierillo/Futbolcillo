@@ -15,6 +15,7 @@ import {
   createVisualBall,
   createVisualPlayers,
   handlePointerDown,
+  handleDetachedPointerMove,
   handlePointerMove,
   hasActiveVisualEffects,
   spawnImpactEffect,
@@ -45,6 +46,8 @@ export default function App() {
   const [terminationNotice, setTerminationNotice] = useState('');
   const [localShotAnimation, setLocalShotAnimation] = useState<ShotAnimation | null>(null);
   const gameStateRef = useRef<GameState>(gameState);
+  const touchAimPhaseRef = useRef<'selecting' | 'aiming' | null>(null);
+  const touchAimOriginRef = useRef<{ x: number; y: number } | null>(null);
   const animFrameRef = useRef<number>(0);
   const containerRef = useRef<HTMLDivElement>(null);
   const lastHandledTerminationRef = useRef<string | null>(null);
@@ -690,7 +693,7 @@ export default function App() {
     return () => window.clearTimeout(timeoutId);
   }, [trainingAiTurnKey]);
 
-  const onMouseDown = useCallback((x: number, y: number) => {
+  const onMouseDown = useCallback((x: number, y: number, pointerType: string) => {
     // Start resume+decode inside the user gesture so the first impact can play.
     void prepareAudio();
     if (isSubmittingShot || isShotAnimating) return;
@@ -702,17 +705,32 @@ export default function App() {
       return;
     }
 
+    const isTouch = pointerType === 'touch';
+    const startsDetachedAim = isTouch && gameStateRef.current.selectedPlayer !== null;
+    touchAimPhaseRef.current = isTouch ? (startsDetachedAim ? 'aiming' : 'selecting') : null;
+    touchAimOriginRef.current = startsDetachedAim ? { x, y } : null;
+
     setGameState((prev) => {
       const next = { ...prev };
       next.players = prev.players.map((p) => ({ ...p }));
       next.dragStart = prev.dragStart ? { ...prev.dragStart } : null;
       next.dragCurrent = prev.dragCurrent ? { ...prev.dragCurrent } : null;
-      handlePointerDown(next, x, y);
+      if (startsDetachedAim && next.selectedPlayer !== null) {
+        const selected = next.players[next.selectedPlayer];
+        next.dragStart = { ...selected.pos };
+        next.dragCurrent = { ...selected.pos };
+      } else {
+        handlePointerDown(next, x, y);
+        if (isTouch && next.dragStart) {
+          next.dragCurrent = { ...next.dragStart };
+        }
+      }
+      gameStateRef.current = next;
       return next;
     });
   }, [activeChallenge, activeMatchId, isShotAnimating, isSubmittingShot, localTeam, matchState]);
 
-  const onMouseMove = useCallback((x: number, y: number) => {
+  const onMouseMove = useCallback((x: number, y: number, pointerType: string) => {
     if (isSubmittingShot || isShotAnimating) return;
     if (activeMatchId && matchState) {
       if (matchState.turn !== localTeam || matchState.phase !== 'aiming') return;
@@ -722,17 +740,27 @@ export default function App() {
       return;
     }
 
+    const touchAimOrigin = pointerType === 'touch' && touchAimPhaseRef.current === 'aiming'
+      ? touchAimOriginRef.current
+      : null;
+    if (pointerType === 'touch' && !touchAimOrigin) return;
+
     setGameState((prev) => {
       const next = { ...prev };
       next.players = prev.players.map((p) => ({ ...p }));
       next.dragStart = prev.dragStart ? { ...prev.dragStart } : null;
       next.dragCurrent = prev.dragCurrent ? { ...prev.dragCurrent } : null;
-      handlePointerMove(next, x, y);
+      if (touchAimOrigin && next.dragStart) {
+        handleDetachedPointerMove(next, touchAimOrigin, x, y);
+      } else {
+        handlePointerMove(next, x, y);
+      }
+      gameStateRef.current = next;
       return next;
     });
   }, [activeChallenge, activeMatchId, isShotAnimating, isSubmittingShot, localTeam, matchState]);
 
-  const onMouseUp = useCallback(() => {
+  const onMouseUp = useCallback((pointerType: string) => {
     console.info('[online-shot][app] mouse-up', {
       activeMatchId,
       isSubmittingShot,
@@ -752,6 +780,14 @@ export default function App() {
     } else if (!activeChallenge && !activeMatchId && gameStateRef.current.turn !== 'away') {
       return;
     }
+
+    if (pointerType === 'touch' && touchAimPhaseRef.current === 'selecting') {
+      touchAimPhaseRef.current = null;
+      touchAimOriginRef.current = null;
+      return;
+    }
+    touchAimPhaseRef.current = null;
+    touchAimOriginRef.current = null;
 
     let shotCandidate: { playerTeam: 'home' | 'away'; playerNumber: number; velX: number; velY: number } | null = null;
 
@@ -794,6 +830,7 @@ export default function App() {
       const next = { ...prev };
       next.players = prev.players.map((p) => ({ ...p }));
       clearPointerSelection(next);
+      gameStateRef.current = next;
       return next;
     });
 
